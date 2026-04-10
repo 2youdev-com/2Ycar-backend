@@ -35,26 +35,6 @@ async function sendReminderEmail(
   })
 }
 
-// ── Types ─────────────────────────────────────────────────────
-interface CustomerInfo {
-  full_name: string
-  email: string
-}
-
-interface VehicleInfo {
-  make: string
-  model: string
-  year: number
-}
-
-interface ReminderLog {
-  id: string
-  service_type: string
-  next_service_date: string
-  customer: CustomerInfo[] | CustomerInfo | null
-  vehicle: VehicleInfo[] | VehicleInfo | null
-}
-
 async function sendMaintenanceReminders() {
   console.log('🔔 Running maintenance reminder job...')
 
@@ -80,10 +60,11 @@ async function sendMaintenanceReminders() {
 
     let sent = 0
 
-    for (const log of (logs || []) as unknown as ReminderLog[]) {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    for (const log of (logs || []) as any[]) {
       // Supabase returns joined rows as arrays — take first element
-      const customer = (Array.isArray(log.customer) ? log.customer[0] : log.customer) as CustomerInfo | null
-      const vehicle  = (Array.isArray(log.vehicle)  ? log.vehicle[0]  : log.vehicle)  as VehicleInfo  | null
+      const customer = Array.isArray(log.customer) ? log.customer[0] : log.customer
+      const vehicle  = Array.isArray(log.vehicle)  ? log.vehicle[0]  : log.vehicle
 
       if (!customer?.email) continue
 
