@@ -36,14 +36,6 @@ async function sendReminderEmail(
 }
 
 // ── Types ─────────────────────────────────────────────────────
-interface ReminderLog {
-  id: string
-  service_type: string
-  next_service_date: string
-  customer: unknown
-  vehicle: unknown
-}
-
 interface CustomerInfo {
   full_name: string
   email: string
@@ -53,6 +45,14 @@ interface VehicleInfo {
   make: string
   model: string
   year: number
+}
+
+interface ReminderLog {
+  id: string
+  service_type: string
+  next_service_date: string
+  customer: CustomerInfo[] | CustomerInfo | null
+  vehicle: VehicleInfo[] | VehicleInfo | null
 }
 
 async function sendMaintenanceReminders() {
