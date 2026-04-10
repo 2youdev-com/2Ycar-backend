@@ -1,0 +1,286 @@
+-- ============================================================
+-- Fix My Car - El Amrety Center | Database Schema (PostgreSQL)
+-- Compatible with Supabase
+-- ============================================================
+
+-- Enable UUID extension
+CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
+
+-- ============================================================
+-- PROFILES TABLE
+-- Extends Supabase auth.users — one row per user
+-- ============================================================
+CREATE TABLE profiles (
+  id           UUID PRIMARY KEY REFERENCES auth.users(id) ON DELETE CASCADE,
+  full_name    TEXT NOT NULL,
+  phone        TEXT,
+  email        TEXT UNIQUE NOT NULL,
+  role         TEXT NOT NULL DEFAULT 'customer'  -- 'admin' | 'customer'
+               CHECK (role IN ('admin', 'customer')),
+  avatar_url   TEXT,
+  center_id    UUID,                              -- NULL for customers, set for admins
+  created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- ============================================================
+-- CENTERS TABLE
+-- Each service center that subscribes to the platform
+-- ============================================================
+CREATE TABLE centers (
+  id           UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  name         TEXT NOT NULL,
+  name_ar      TEXT,
+  logo_url     TEXT,
+  address      TEXT,
+  phone        TEXT,
+  email        TEXT,
+  qr_code      TEXT UNIQUE,                        -- for QR registration
+  plan         TEXT NOT NULL DEFAULT 'trial'
+               CHECK (plan IN ('trial', 'monthly', 'annual')),
+  trial_ends   TIMESTAMPTZ,
+  is_active    BOOLEAN NOT NULL DEFAULT TRUE,
+  created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- Add FK from profiles to centers
+ALTER TABLE profiles
+  ADD CONSTRAINT fk_profiles_center
+  FOREIGN KEY (center_id) REFERENCES centers(id) ON DELETE SET NULL;
+
+-- ============================================================
+-- VEHICLES TABLE
+-- Each car owned by a customer, linked to a center
+-- ============================================================
+CREATE TABLE vehicles (
+  id           UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  customer_id  UUID NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+  center_id    UUID NOT NULL REFERENCES centers(id) ON DELETE CASCADE,
+  make         TEXT NOT NULL,       -- e.g. BMW
+  model        TEXT NOT NULL,       -- e.g. 320i
+  year         INTEGER,
+  color        TEXT,
+  vin          TEXT UNIQUE,         -- Vehicle Identification Number
+  plate_number TEXT,
+  created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- ============================================================
+-- SPARE_PARTS TABLE
+-- Inventory managed by each center
+-- ============================================================
+CREATE TABLE spare_parts (
+  id           UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  center_id    UUID NOT NULL REFERENCES centers(id) ON DELETE CASCADE,
+  name         TEXT NOT NULL,
+  name_ar      TEXT,
+  brand        TEXT,
+  sku          TEXT,
+  price        NUMERIC(10, 2) NOT NULL DEFAULT 0,
+  quantity     INTEGER NOT NULL DEFAULT 0,
+  unit         TEXT DEFAULT 'piece',              -- 'piece' | 'liter' | 'set'
+  category     TEXT,                              -- 'oil' | 'filter' | 'brake' | 'tyre' | 'other'
+  image_url    TEXT,
+  is_available BOOLEAN NOT NULL DEFAULT TRUE,
+  low_stock_threshold INTEGER DEFAULT 5,
+  created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- ============================================================
+-- MAINTENANCE_LOGS TABLE
+-- Core table — records every maintenance session
+-- ============================================================
+CREATE TABLE maintenance_logs (
+  id              UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  center_id       UUID NOT NULL REFERENCES centers(id) ON DELETE CASCADE,
+  vehicle_id      UUID NOT NULL REFERENCES vehicles(id) ON DELETE CASCADE,
+  customer_id     UUID NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+  technician_id   UUID REFERENCES profiles(id) ON DELETE SET NULL,
+  date            DATE NOT NULL DEFAULT CURRENT_DATE,
+  mileage         INTEGER,                         -- km reading at service time
+  next_service_km INTEGER,                         -- recommended next service km
+  next_service_date DATE,
+  service_type    TEXT NOT NULL,                   -- 'oil_change' | 'brake' | 'full_service' | 'repair' | 'inspection'
+  description     TEXT,
+  notes           TEXT,
+  total_cost      NUMERIC(10, 2) NOT NULL DEFAULT 0,
+  status          TEXT NOT NULL DEFAULT 'completed'
+                  CHECK (status IN ('pending', 'in_progress', 'completed', 'cancelled')),
+  created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- ============================================================
+-- MAINTENANCE_LOG_PARTS (Junction Table)
+-- Parts used in each maintenance session
+-- ============================================================
+CREATE TABLE maintenance_log_parts (
+  id             UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  log_id         UUID NOT NULL REFERENCES maintenance_logs(id) ON DELETE CASCADE,
+  part_id        UUID REFERENCES spare_parts(id) ON DELETE SET NULL,
+  part_name      TEXT NOT NULL,      -- snapshot at time of service
+  quantity_used  INTEGER NOT NULL DEFAULT 1,
+  unit_price     NUMERIC(10, 2) NOT NULL DEFAULT 0,
+  total_price    NUMERIC(10, 2) GENERATED ALWAYS AS (quantity_used * unit_price) STORED
+);
+
+-- ============================================================
+-- APPOINTMENTS TABLE
+-- Optional: booking requests from customers
+-- ============================================================
+CREATE TABLE appointments (
+  id           UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  center_id    UUID NOT NULL REFERENCES centers(id) ON DELETE CASCADE,
+  customer_id  UUID NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+  vehicle_id   UUID NOT NULL REFERENCES vehicles(id) ON DELETE CASCADE,
+  requested_at TIMESTAMPTZ NOT NULL,
+  service_type TEXT,
+  notes        TEXT,
+  status       TEXT NOT NULL DEFAULT 'pending'
+               CHECK (status IN ('pending', 'confirmed', 'cancelled', 'completed')),
+  created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- ============================================================
+-- INDEXES
+-- ============================================================
+CREATE INDEX idx_vehicles_customer    ON vehicles(customer_id);
+CREATE INDEX idx_vehicles_center      ON vehicles(center_id);
+CREATE INDEX idx_maint_center         ON maintenance_logs(center_id);
+CREATE INDEX idx_maint_vehicle        ON maintenance_logs(vehicle_id);
+CREATE INDEX idx_maint_customer       ON maintenance_logs(customer_id);
+CREATE INDEX idx_maint_date           ON maintenance_logs(date DESC);
+CREATE INDEX idx_parts_center         ON spare_parts(center_id);
+CREATE INDEX idx_parts_available      ON spare_parts(is_available);
+CREATE INDEX idx_appointments_center  ON appointments(center_id);
+CREATE INDEX idx_appointments_date    ON appointments(requested_at);
+
+-- ============================================================
+-- ROW LEVEL SECURITY (RLS)
+-- ============================================================
+ALTER TABLE profiles          ENABLE ROW LEVEL SECURITY;
+ALTER TABLE vehicles           ENABLE ROW LEVEL SECURITY;
+ALTER TABLE maintenance_logs   ENABLE ROW LEVEL SECURITY;
+ALTER TABLE spare_parts        ENABLE ROW LEVEL SECURITY;
+ALTER TABLE appointments       ENABLE ROW LEVEL SECURITY;
+
+-- Profiles: users see only their own row
+CREATE POLICY "Users see own profile"
+  ON profiles FOR SELECT USING (auth.uid() = id);
+
+CREATE POLICY "Users update own profile"
+  ON profiles FOR UPDATE USING (auth.uid() = id);
+
+-- Admins see all profiles in their center
+CREATE POLICY "Admins see center profiles"
+  ON profiles FOR SELECT
+  USING (
+    EXISTS (
+      SELECT 1 FROM profiles p
+      WHERE p.id = auth.uid() AND p.role = 'admin'
+      AND p.center_id = profiles.center_id
+    )
+  );
+
+-- Vehicles: customer sees own, admin sees center's
+CREATE POLICY "Customer sees own vehicles"
+  ON vehicles FOR SELECT USING (customer_id = auth.uid());
+
+CREATE POLICY "Admin manages center vehicles"
+  ON vehicles FOR ALL
+  USING (
+    EXISTS (
+      SELECT 1 FROM profiles p
+      WHERE p.id = auth.uid() AND p.role = 'admin'
+      AND p.center_id = vehicles.center_id
+    )
+  );
+
+-- Maintenance logs: customer sees own, admin sees center's
+CREATE POLICY "Customer sees own logs"
+  ON maintenance_logs FOR SELECT USING (customer_id = auth.uid());
+
+CREATE POLICY "Admin manages center logs"
+  ON maintenance_logs FOR ALL
+  USING (
+    EXISTS (
+      SELECT 1 FROM profiles p
+      WHERE p.id = auth.uid() AND p.role = 'admin'
+      AND p.center_id = maintenance_logs.center_id
+    )
+  );
+
+-- Spare parts: everyone in center can read; admin can write
+CREATE POLICY "Anyone can read spare parts"
+  ON spare_parts FOR SELECT USING (is_available = TRUE);
+
+CREATE POLICY "Admin manages spare parts"
+  ON spare_parts FOR ALL
+  USING (
+    EXISTS (
+      SELECT 1 FROM profiles p
+      WHERE p.id = auth.uid() AND p.role = 'admin'
+      AND p.center_id = spare_parts.center_id
+    )
+  );
+
+-- ============================================================
+-- FUNCTIONS & TRIGGERS
+-- ============================================================
+
+-- Auto-update updated_at
+CREATE OR REPLACE FUNCTION update_updated_at()
+RETURNS TRIGGER AS $$
+BEGIN
+  NEW.updated_at = NOW();
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER trg_profiles_updated
+  BEFORE UPDATE ON profiles
+  FOR EACH ROW EXECUTE FUNCTION update_updated_at();
+
+CREATE TRIGGER trg_vehicles_updated
+  BEFORE UPDATE ON vehicles
+  FOR EACH ROW EXECUTE FUNCTION update_updated_at();
+
+CREATE TRIGGER trg_maint_updated
+  BEFORE UPDATE ON maintenance_logs
+  FOR EACH ROW EXECUTE FUNCTION update_updated_at();
+
+CREATE TRIGGER trg_parts_updated
+  BEFORE UPDATE ON spare_parts
+  FOR EACH ROW EXECUTE FUNCTION update_updated_at();
+
+-- Auto-deduct inventory when a maintenance log part is inserted
+CREATE OR REPLACE FUNCTION deduct_part_inventory()
+RETURNS TRIGGER AS $$
+BEGIN
+  IF NEW.part_id IS NOT NULL THEN
+    UPDATE spare_parts
+    SET quantity = quantity - NEW.quantity_used
+    WHERE id = NEW.part_id AND quantity >= NEW.quantity_used;
+  END IF;
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER trg_deduct_inventory
+  AFTER INSERT ON maintenance_log_parts
+  FOR EACH ROW EXECUTE FUNCTION deduct_part_inventory();
+
+-- ============================================================
+-- SEED: Demo center (El Amrety)
+-- ============================================================
+INSERT INTO centers (id, name, name_ar, plan, trial_ends, qr_code)
+VALUES (
+  'a1b2c3d4-0000-0000-0000-000000000001',
+  'El Amrety Center',
+  'مركز العمريطي',
+  'trial',
+  NOW() + INTERVAL '14 days',
+  'ELAMRETY-001'
+);
