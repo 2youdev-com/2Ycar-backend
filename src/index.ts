@@ -22,7 +22,7 @@ const PORT = process.env.PORT || 4000
 // ── Security & Middleware ──────────────────────────────────────
 app.use(helmet())
 app.use(cors({
-  origin: process.env.FRONTEND_URL || 'http://localhost:3000',
+  origin: process.env.FRONTEND_URL || '*',
   credentials: true,
 }))
 app.use(morgan('dev'))
@@ -67,9 +67,12 @@ app.use((err: Error, _req: express.Request, res: express.Response, _next: expres
   res.status(500).json({ error: 'Internal server error' })
 })
 
-app.listen(PORT, () => {
-  console.log(`🚀 El Amrety API running on http://localhost:${PORT}`)
-  startReminderJob()
-})
+// Only listen when running locally (not on Vercel)
+if (!process.env.VERCEL) {
+  app.listen(PORT, () => {
+    console.log(`🚀 El Amrety API running on http://localhost:${PORT}`)
+    startReminderJob()
+  })
+}
 
 export default app
