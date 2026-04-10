@@ -1,12 +1,7 @@
 import { Request, Response, NextFunction } from 'express'
-import { createClient } from '@supabase/supabase-js'
-import dotenv from 'dotenv'
-dotenv.config()
+import jwt from 'jsonwebtoken'
 
-const supabase = createClient(
-  process.env.SUPABASE_URL!,
-  process.env.SUPABASE_ANON_KEY!
-)
+const JWT_SECRET = process.env.JWT_SECRET || 'change-me-in-production'
 
 export interface AuthRequest extends Request {
   user?: {
@@ -17,7 +12,7 @@ export interface AuthRequest extends Request {
   }
 }
 
-// ── Verify JWT from Supabase Auth ─────────────────────────────
+// ── Verify JWT ───────────────────────────────────────────────
 export async function requireAuth(req: AuthRequest, res: Response, next: NextFunction) {
   const authHeader = req.headers.authorization
   if (!authHeader?.startsWith('Bearer ')) {
@@ -26,26 +21,25 @@ export async function requireAuth(req: AuthRequest, res: Response, next: NextFun
 
   const token = authHeader.split(' ')[1]
 
-  const { data: { user }, error } = await supabase.auth.getUser(token)
-  if (error || !user) {
+  try {
+    const payload = jwt.verify(token, JWT_SECRET) as {
+      id: string
+      email: string
+      role: 'admin' | 'customer'
+      center_id: string | null
+    }
+
+    req.user = {
+      id:        payload.id,
+      email:     payload.email,
+      role:      payload.role,
+      center_id: payload.center_id,
+    }
+
+    next()
+  } catch {
     return res.status(401).json({ error: 'Invalid or expired token' })
   }
-
-  // Fetch profile for role + center_id
-  const { data: profile } = await supabase
-    .from('profiles')
-    .select('role, center_id')
-    .eq('id', user.id)
-    .single()
-
-  req.user = {
-    id:        user.id,
-    email:     user.email!,
-    role:      profile?.role ?? 'customer',
-    center_id: profile?.center_id ?? null,
-  }
-
-  next()
 }
 
 // ── Admin-only guard ──────────────────────────────────────────

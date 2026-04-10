@@ -1,6 +1,6 @@
 -- ============================================================
 -- Fix My Car - El Amrety Center | Database Schema (PostgreSQL)
--- Compatible with Supabase
+-- Compatible with Neon PostgreSQL
 -- ============================================================
 
 -- Enable UUID extension
@@ -8,17 +8,18 @@ CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 
 -- ============================================================
 -- PROFILES TABLE
--- Extends Supabase auth.users — one row per user
+-- One row per user (admin or customer)
 -- ============================================================
 CREATE TABLE profiles (
-  id           UUID PRIMARY KEY REFERENCES auth.users(id) ON DELETE CASCADE,
+  id           UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   full_name    TEXT NOT NULL,
   phone        TEXT,
   email        TEXT UNIQUE NOT NULL,
-  role         TEXT NOT NULL DEFAULT 'customer'  -- 'admin' | 'customer'
+  password_hash TEXT,                                  -- bcrypt hash, NULL for legacy/admin-created customers
+  role         TEXT NOT NULL DEFAULT 'customer'        -- 'admin' | 'customer'
                CHECK (role IN ('admin', 'customer')),
   avatar_url   TEXT,
-  center_id    UUID,                              -- NULL for customers, set for admins
+  center_id    UUID,                                   -- NULL for customers, set for admins
   created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
@@ -35,7 +36,7 @@ CREATE TABLE centers (
   address      TEXT,
   phone        TEXT,
   email        TEXT,
-  qr_code      TEXT UNIQUE,                        -- for QR registration
+  qr_code      TEXT UNIQUE,                            -- for QR registration
   plan         TEXT NOT NULL DEFAULT 'trial'
                CHECK (plan IN ('trial', 'monthly', 'annual')),
   trial_ends   TIMESTAMPTZ,
@@ -156,75 +157,6 @@ CREATE INDEX idx_parts_center         ON spare_parts(center_id);
 CREATE INDEX idx_parts_available      ON spare_parts(is_available);
 CREATE INDEX idx_appointments_center  ON appointments(center_id);
 CREATE INDEX idx_appointments_date    ON appointments(requested_at);
-
--- ============================================================
--- ROW LEVEL SECURITY (RLS)
--- ============================================================
-ALTER TABLE profiles          ENABLE ROW LEVEL SECURITY;
-ALTER TABLE vehicles           ENABLE ROW LEVEL SECURITY;
-ALTER TABLE maintenance_logs   ENABLE ROW LEVEL SECURITY;
-ALTER TABLE spare_parts        ENABLE ROW LEVEL SECURITY;
-ALTER TABLE appointments       ENABLE ROW LEVEL SECURITY;
-
--- Profiles: users see only their own row
-CREATE POLICY "Users see own profile"
-  ON profiles FOR SELECT USING (auth.uid() = id);
-
-CREATE POLICY "Users update own profile"
-  ON profiles FOR UPDATE USING (auth.uid() = id);
-
--- Admins see all profiles in their center
-CREATE POLICY "Admins see center profiles"
-  ON profiles FOR SELECT
-  USING (
-    EXISTS (
-      SELECT 1 FROM profiles p
-      WHERE p.id = auth.uid() AND p.role = 'admin'
-      AND p.center_id = profiles.center_id
-    )
-  );
-
--- Vehicles: customer sees own, admin sees center's
-CREATE POLICY "Customer sees own vehicles"
-  ON vehicles FOR SELECT USING (customer_id = auth.uid());
-
-CREATE POLICY "Admin manages center vehicles"
-  ON vehicles FOR ALL
-  USING (
-    EXISTS (
-      SELECT 1 FROM profiles p
-      WHERE p.id = auth.uid() AND p.role = 'admin'
-      AND p.center_id = vehicles.center_id
-    )
-  );
-
--- Maintenance logs: customer sees own, admin sees center's
-CREATE POLICY "Customer sees own logs"
-  ON maintenance_logs FOR SELECT USING (customer_id = auth.uid());
-
-CREATE POLICY "Admin manages center logs"
-  ON maintenance_logs FOR ALL
-  USING (
-    EXISTS (
-      SELECT 1 FROM profiles p
-      WHERE p.id = auth.uid() AND p.role = 'admin'
-      AND p.center_id = maintenance_logs.center_id
-    )
-  );
-
--- Spare parts: everyone in center can read; admin can write
-CREATE POLICY "Anyone can read spare parts"
-  ON spare_parts FOR SELECT USING (is_available = TRUE);
-
-CREATE POLICY "Admin manages spare parts"
-  ON spare_parts FOR ALL
-  USING (
-    EXISTS (
-      SELECT 1 FROM profiles p
-      WHERE p.id = auth.uid() AND p.role = 'admin'
-      AND p.center_id = spare_parts.center_id
-    )
-  );
 
 -- ============================================================
 -- FUNCTIONS & TRIGGERS

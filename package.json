@@ -6,38 +6,38 @@
     "dev": "tsx watch src/index.ts",
     "build": "tsc",
     "start": "node dist/index.js",
-    "lint": "eslint src --ext .ts",
-    "db:push": "supabase db push",
-    "db:reset": "supabase db reset"
+    "lint": "eslint src --ext .ts"
   },
   "dependencies": {
-    "express": "^4.19.2",
+    "@neondatabase/serverless": "^1.0.2",
+    "bcryptjs": "^3.0.3",
     "cors": "^2.8.5",
-    "helmet": "^7.1.0",
-    "morgan": "^1.10.0",
     "dotenv": "^16.4.5",
-    "@supabase/supabase-js": "^2.45.0",
-    "zod": "^3.23.8",
+    "express": "^4.19.2",
     "express-rate-limit": "^7.3.1",
     "express-validator": "^7.1.0",
+    "helmet": "^7.1.0",
     "jsonwebtoken": "^9.0.2",
+    "morgan": "^1.10.0",
     "multer": "^1.4.5-lts.1",
+    "node-cron": "^3.0.3",
     "nodemailer": "^6.9.14",
-    "node-cron": "^3.0.3"
+    "zod": "^3.23.8"
   },
   "devDependencies": {
-    "typescript": "^5.5.3",
-    "@types/node": "^20.14.11",
-    "@types/express": "^4.17.21",
+    "@types/bcryptjs": "^2.4.6",
     "@types/cors": "^2.8.17",
-    "@types/morgan": "^1.9.9",
+    "@types/express": "^4.17.21",
     "@types/jsonwebtoken": "^9.0.6",
+    "@types/morgan": "^1.9.9",
     "@types/multer": "^1.4.11",
-    "@types/nodemailer": "^6.4.15",
+    "@types/node": "^20.14.11",
     "@types/node-cron": "^3.0.11",
-    "tsx": "^4.16.2",
-    "eslint": "^8.57.0",
+    "@types/nodemailer": "^6.4.15",
+    "@typescript-eslint/eslint-plugin": "^7.16.0",
     "@typescript-eslint/parser": "^7.16.0",
-    "@typescript-eslint/eslint-plugin": "^7.16.0"
+    "eslint": "^8.57.0",
+    "tsx": "^4.16.2",
+    "typescript": "^5.5.3"
   }
 }

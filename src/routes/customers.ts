@@ -1,6 +1,7 @@
 import { Router, Response } from 'express'
 import { z } from 'zod'
-import { db } from '../db/client'
+import bcrypt from 'bcryptjs'
+import { sql } from '../db/client'
 import { requireAuth, requireAdmin, AuthRequest } from '../middleware/auth'
 
 export const customersRouter = Router()
@@ -16,31 +17,21 @@ const customerSchema = z.object({
 customersRouter.get('/', requireAuth, requireAdmin, async (req: AuthRequest, res: Response) => {
   const centerId = req.user!.center_id!
   const { search, page = '1', limit = '30' } = req.query
+  const offset = (+page - 1) * +limit
 
   try {
-    // Get all customer IDs linked to this center via their vehicles
-    const { data: vehicleLinks } = await db
-      .from('vehicles')
-      .select('customer_id')
-      .eq('center_id', centerId)
+    const data = await sql`
+      SELECT DISTINCT p.id, p.full_name, p.phone, p.email, p.avatar_url, p.created_at
+      FROM profiles p
+      JOIN vehicles v ON v.customer_id = p.id
+      WHERE v.center_id = ${centerId}
+        AND p.role = 'customer'
+        AND (${search || null}::text IS NULL OR p.full_name ILIKE ${'%' + (search || '') + '%'})
+      ORDER BY p.full_name ASC
+      LIMIT ${+limit} OFFSET ${offset}
+    `
 
-    const customerIds = [...new Set((vehicleLinks || []).map((v: { customer_id: string }) => v.customer_id))]
-    if (customerIds.length === 0) return res.json({ data: [], total: 0 })
-
-    let query = db
-      .from('profiles')
-      .select('id, full_name, phone, email, avatar_url, created_at')
-      .in('id', customerIds)
-      .eq('role', 'customer')
-      .order('full_name', { ascending: true })
-      .range((+page - 1) * +limit, +page * +limit - 1)
-
-    if (search) query = query.ilike('full_name', `%${search}%`)
-
-    const { data, error, count } = await query
-    if (error) throw error
-
-    return res.json({ data, total: count, page: +page, limit: +limit })
+    return res.json({ data, page: +page, limit: +limit })
   } catch (err) {
     console.error(err)
     return res.status(500).json({ error: 'Failed to fetch customers' })
@@ -52,20 +43,21 @@ customersRouter.get('/:id', requireAuth, requireAdmin, async (req: AuthRequest, 
   const centerId = req.user!.center_id!
 
   try {
-    const [{ data: profile }, { data: vehicles }, { data: logs }] = await Promise.all([
-      db.from('profiles').select('*').eq('id', req.params.id).single(),
-      db.from('vehicles').select('*').eq('customer_id', req.params.id).eq('center_id', centerId),
-      db.from('maintenance_logs')
-        .select('id, date, service_type, total_cost, status, mileage')
-        .eq('customer_id', req.params.id)
-        .eq('center_id', centerId)
-        .order('date', { ascending: false })
-        .limit(20),
+    const [profileRows, vehicles, logs] = await Promise.all([
+      sql`SELECT * FROM profiles WHERE id = ${req.params.id}`,
+      sql`SELECT * FROM vehicles WHERE customer_id = ${req.params.id} AND center_id = ${centerId}`,
+      sql`
+        SELECT id, date, service_type, total_cost, status, mileage
+        FROM maintenance_logs
+        WHERE customer_id = ${req.params.id} AND center_id = ${centerId}
+        ORDER BY date DESC
+        LIMIT 20
+      `,
     ])
 
-    if (!profile) return res.status(404).json({ error: 'Customer not found' })
+    if (profileRows.length === 0) return res.status(404).json({ error: 'Customer not found' })
 
-    return res.json({ profile, vehicles, logs })
+    return res.json({ profile: profileRows[0], vehicles, logs })
   } catch (err) {
     console.error(err)
     return res.status(500).json({ error: 'Failed to fetch customer' })
@@ -80,30 +72,16 @@ customersRouter.post('/', requireAuth, requireAdmin, async (req: AuthRequest, re
   }
 
   try {
-    // Create Supabase auth user
-    const { data: authUser, error: authErr } = await db.auth.admin.createUser({
-      email:    parsed.data.email,
-      password: Math.random().toString(36).slice(2, 10) + 'Aa1!',
-      email_confirm: true,
-    })
+    const randomPassword = Math.random().toString(36).slice(2, 10) + 'Aa1!'
+    const passwordHash = await bcrypt.hash(randomPassword, 10)
 
-    if (authErr || !authUser.user) throw authErr
+    const rows = await sql`
+      INSERT INTO profiles (full_name, email, phone, avatar_url, password_hash, role)
+      VALUES (${parsed.data.full_name}, ${parsed.data.email}, ${parsed.data.phone ?? null}, ${parsed.data.avatar_url ?? null}, ${passwordHash}, 'customer')
+      RETURNING id, full_name, email, phone, avatar_url, role, created_at
+    `
 
-    // Insert profile
-    const { data, error } = await db
-      .from('profiles')
-      .insert({
-        id:        authUser.user.id,
-        email:     parsed.data.email,
-        full_name: parsed.data.full_name,
-        phone:     parsed.data.phone,
-        role:      'customer',
-      })
-      .select()
-      .single()
-
-    if (error) throw error
-    return res.status(201).json(data)
+    return res.status(201).json(rows[0])
   } catch (err) {
     console.error(err)
     return res.status(500).json({ error: 'Failed to create customer' })
@@ -117,16 +95,20 @@ customersRouter.patch('/:id', requireAuth, requireAdmin, async (req: AuthRequest
     return res.status(400).json({ error: 'Validation failed', issues: parsed.error.flatten() })
   }
 
+  const d = parsed.data
   try {
-    const { data, error } = await db
-      .from('profiles')
-      .update({ ...parsed.data, updated_at: new Date().toISOString() })
-      .eq('id', req.params.id)
-      .select()
-      .single()
+    const rows = await sql`
+      UPDATE profiles SET
+        full_name  = COALESCE(${d.full_name ?? null}, full_name),
+        phone      = COALESCE(${d.phone ?? null}, phone),
+        email      = COALESCE(${d.email ?? null}, email),
+        avatar_url = COALESCE(${d.avatar_url ?? null}, avatar_url)
+      WHERE id = ${req.params.id}
+      RETURNING *
+    `
 
-    if (error || !data) return res.status(404).json({ error: 'Customer not found' })
-    return res.json(data)
+    if (rows.length === 0) return res.status(404).json({ error: 'Customer not found' })
+    return res.json(rows[0])
   } catch (err) {
     console.error(err)
     return res.status(500).json({ error: 'Failed to update customer' })

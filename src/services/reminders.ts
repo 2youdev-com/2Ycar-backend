@@ -1,6 +1,6 @@
 import cron from 'node-cron'
 import nodemailer from 'nodemailer'
-import { db } from '../db/client'
+import { sql } from '../db/client'
 import dotenv from 'dotenv'
 dotenv.config()
 
@@ -45,38 +45,32 @@ async function sendMaintenanceReminders() {
     const today  = new Date().toISOString().split('T')[0]
     const target = sevenDaysFromNow.toISOString().split('T')[0]
 
-    const { data: logs, error } = await db
-      .from('maintenance_logs')
-      .select(`
-        id, service_type, next_service_date,
-        customer:profiles!customer_id(full_name, email, phone),
-        vehicle:vehicles(make, model, year, plate_number)
-      `)
-      .gte('next_service_date', today)
-      .lte('next_service_date', target)
-      .eq('status', 'completed')
-
-    if (error) throw error
+    const logs = await sql`
+      SELECT ml.id, ml.service_type, ml.next_service_date,
+        cp.full_name AS customer_name, cp.email AS customer_email,
+        v.make, v.model, v.year
+      FROM maintenance_logs ml
+      LEFT JOIN profiles cp ON cp.id = ml.customer_id
+      LEFT JOIN vehicles v ON v.id = ml.vehicle_id
+      WHERE ml.next_service_date >= ${today}::date
+        AND ml.next_service_date <= ${target}::date
+        AND ml.status = 'completed'
+    `
 
     let sent = 0
 
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    for (const log of (logs || []) as any[]) {
-      // Supabase returns joined rows as arrays — take first element
-      const customer = Array.isArray(log.customer) ? log.customer[0] : log.customer
-      const vehicle  = Array.isArray(log.vehicle)  ? log.vehicle[0]  : log.vehicle
+    for (const log of logs) {
+      if (!log.customer_email) continue
 
-      if (!customer?.email) continue
-
-      const vehicleInfo  = vehicle ? `${vehicle.make} ${vehicle.model} ${vehicle.year}` : 'سيارتك'
+      const vehicleInfo  = log.make ? `${log.make} ${log.model} ${log.year}` : 'سيارتك'
       const serviceLabel = (log.service_type || 'صيانة دورية').replace(/_/g, ' ')
 
       try {
-        await sendReminderEmail(customer.email, customer.full_name, vehicleInfo, serviceLabel)
+        await sendReminderEmail(log.customer_email, log.customer_name, vehicleInfo, serviceLabel)
         sent++
-        console.log(`  ✅ Reminder sent to ${customer.email}`)
+        console.log(`  ✅ Reminder sent to ${log.customer_email}`)
       } catch (emailErr) {
-        console.error(`  ❌ Failed to send to ${customer.email}:`, emailErr)
+        console.error(`  ❌ Failed to send to ${log.customer_email}:`, emailErr)
       }
     }
 

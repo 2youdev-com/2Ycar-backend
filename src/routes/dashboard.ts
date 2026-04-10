@@ -1,5 +1,5 @@
 import { Router, Response } from 'express'
-import { db } from '../db/client'
+import { sql } from '../db/client'
 import { requireAuth, requireAdmin, AuthRequest } from '../middleware/auth'
 
 export const dashboardRouter = Router()
@@ -10,61 +10,43 @@ dashboardRouter.get('/stats', requireAuth, requireAdmin, async (req: AuthRequest
   if (!centerId) return res.status(400).json({ error: 'No center associated with this account' })
 
   try {
-    const now       = new Date()
-    const thisMonth = new Date(now.getFullYear(), now.getMonth(), 1).toISOString()
-    const lastMonth = new Date(now.getFullYear(), now.getMonth() - 1, 1).toISOString()
+    const now          = new Date()
+    const thisMonth    = new Date(now.getFullYear(), now.getMonth(), 1).toISOString()
+    const lastMonth    = new Date(now.getFullYear(), now.getMonth() - 1, 1).toISOString()
     const lastMonthEnd = new Date(now.getFullYear(), now.getMonth(), 0).toISOString()
 
     const [
-      { count: totalCustomers },
-      { count: pendingAppointments },
-      { data: lowStockParts },
-      { data: thisMonthLogs },
-      { data: lastMonthLogs },
-      { count: totalLogs },
+      customersResult,
+      appointmentsResult,
+      lowStockParts,
+      thisMonthLogs,
+      lastMonthLogs,
+      totalLogsResult,
     ] = await Promise.all([
-      db.from('profiles')
-        .select('*', { count: 'exact', head: true })
-        .eq('role', 'customer'),
-
-      db.from('appointments')
-        .select('*', { count: 'exact', head: true })
-        .eq('center_id', centerId)
-        .eq('status', 'pending'),
-
-      db.from('spare_parts')
-        .select('id, name, quantity, low_stock_threshold')
-        .eq('center_id', centerId)
-        .filter('quantity', 'lte', 'low_stock_threshold'),
-
-      db.from('maintenance_logs')
-        .select('total_cost')
-        .eq('center_id', centerId)
-        .gte('date', thisMonth),
-
-      db.from('maintenance_logs')
-        .select('total_cost')
-        .eq('center_id', centerId)
-        .gte('date', lastMonth)
-        .lte('date', lastMonthEnd),
-
-      db.from('maintenance_logs')
-        .select('*', { count: 'exact', head: true })
-        .eq('center_id', centerId),
+      sql`SELECT COUNT(*)::int AS count FROM profiles WHERE role = 'customer'`,
+      sql`SELECT COUNT(*)::int AS count FROM appointments WHERE center_id = ${centerId} AND status = 'pending'`,
+      sql`SELECT id, name, quantity, low_stock_threshold FROM spare_parts WHERE center_id = ${centerId} AND quantity <= low_stock_threshold`,
+      sql`SELECT total_cost FROM maintenance_logs WHERE center_id = ${centerId} AND date >= ${thisMonth}::date`,
+      sql`SELECT total_cost FROM maintenance_logs WHERE center_id = ${centerId} AND date >= ${lastMonth}::date AND date <= ${lastMonthEnd}::date`,
+      sql`SELECT COUNT(*)::int AS count FROM maintenance_logs WHERE center_id = ${centerId}`,
     ])
 
-    const monthlyRevenue   = (thisMonthLogs || []).reduce((s: number, l: { total_cost: number }) => s + (l.total_cost || 0), 0)
-    const prevRevenue      = (lastMonthLogs || []).reduce((s: number, l: { total_cost: number }) => s + (l.total_cost || 0), 0)
-    const revenueChange    = prevRevenue > 0 ? ((monthlyRevenue - prevRevenue) / prevRevenue) * 100 : 0
+    const totalCustomers      = customersResult[0]?.count ?? 0
+    const pendingAppointments = appointmentsResult[0]?.count ?? 0
+    const totalLogs           = totalLogsResult[0]?.count ?? 0
+
+    const monthlyRevenue = thisMonthLogs.reduce((s, l) => s + (Number(l.total_cost) || 0), 0)
+    const prevRevenue    = lastMonthLogs.reduce((s, l) => s + (Number(l.total_cost) || 0), 0)
+    const revenueChange  = prevRevenue > 0 ? ((monthlyRevenue - prevRevenue) / prevRevenue) * 100 : 0
 
     return res.json({
-      totalCustomers:      totalCustomers ?? 0,
-      pendingAppointments: pendingAppointments ?? 0,
-      lowStockParts:       (lowStockParts || []).length,
-      lowStockItems:       lowStockParts || [],
+      totalCustomers,
+      pendingAppointments,
+      lowStockParts:  lowStockParts.length,
+      lowStockItems:  lowStockParts,
       monthlyRevenue,
-      revenueChange:       Math.round(revenueChange * 10) / 10,
-      totalLogs:           totalLogs ?? 0,
+      revenueChange:  Math.round(revenueChange * 10) / 10,
+      totalLogs,
     })
   } catch (err) {
     console.error(err)
@@ -78,20 +60,19 @@ dashboardRouter.get('/revenue-chart', requireAuth, requireAdmin, async (req: Aut
   if (!centerId) return res.status(400).json({ error: 'No center associated' })
 
   try {
-    const { data, error } = await db
-      .from('maintenance_logs')
-      .select('date, total_cost')
-      .eq('center_id', centerId)
-      .gte('date', new Date(Date.now() - 180 * 24 * 60 * 60 * 1000).toISOString())
-      .order('date', { ascending: true })
+    const since = new Date(Date.now() - 180 * 24 * 60 * 60 * 1000).toISOString()
 
-    if (error) throw error
+    const data = await sql`
+      SELECT date, total_cost FROM maintenance_logs
+      WHERE center_id = ${centerId} AND date >= ${since}::date
+      ORDER BY date ASC
+    `
 
     // Group by month
     const grouped: Record<string, number> = {}
-    for (const log of data || []) {
-      const month = log.date.slice(0, 7) // YYYY-MM
-      grouped[month] = (grouped[month] || 0) + log.total_cost
+    for (const log of data) {
+      const month = String(log.date).slice(0, 7) // YYYY-MM
+      grouped[month] = (grouped[month] || 0) + Number(log.total_cost)
     }
 
     return res.json(

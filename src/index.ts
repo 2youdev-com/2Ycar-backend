@@ -14,6 +14,7 @@ import { customersRouter }    from './routes/customers'
 import { vehiclesRouter }     from './routes/vehicles'
 import { dashboardRouter }    from './routes/dashboard'
 import { appointmentsRouter } from './routes/appointments'
+import { authRouter }         from './routes/auth'
 
 const app  = express()
 const PORT = process.env.PORT || 4000
@@ -48,6 +49,7 @@ app.get('/health', (_req, res) => {
 
 // ── API Routes ────────────────────────────────────────────────
 const API = '/api/v1'
+app.use(`${API}/auth`,         authRouter)
 app.use(`${API}/dashboard`,    dashboardRouter)
 app.use(`${API}/maintenance`,  maintenanceRouter)
 app.use(`${API}/inventory`,    inventoryRouter)

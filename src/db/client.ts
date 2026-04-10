@@ -1,15 +1,11 @@
-import { createClient } from '@supabase/supabase-js'
+import { neon } from '@neondatabase/serverless'
 import dotenv from 'dotenv'
 dotenv.config()
 
-const supabaseUrl     = process.env.SUPABASE_URL!
-const supabaseKey     = process.env.SUPABASE_SERVICE_ROLE_KEY!
+const databaseUrl = process.env.DATABASE_URL!
 
-if (!supabaseUrl || !supabaseKey) {
-  throw new Error('Missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY env vars')
+if (!databaseUrl) {
+  throw new Error('Missing DATABASE_URL env var')
 }
 
-// Service-role client — bypasses RLS for server-side operations
-export const db = createClient(supabaseUrl, supabaseKey, {
-  auth: { autoRefreshToken: false, persistSession: false },
-})
+export const sql = neon(databaseUrl)

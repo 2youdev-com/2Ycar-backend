@@ -1,6 +1,6 @@
 import { Router, Response } from 'express'
 import { z } from 'zod'
-import { db } from '../db/client'
+import { sql } from '../db/client'
 import { requireAuth, requireAdmin, AuthRequest } from '../middleware/auth'
 
 export const appointmentsRouter = Router()
@@ -18,21 +18,22 @@ appointmentsRouter.get('/', requireAuth, requireAdmin, async (req: AuthRequest, 
   const { status, date } = req.query
 
   try {
-    let query = db
-      .from('appointments')
-      .select(`
-        *,
-        customer:profiles!customer_id(full_name, phone),
-        vehicle:vehicles(make, model, plate_number)
-      `)
-      .eq('center_id', centerId)
-      .order('requested_at', { ascending: true })
+    const data = await sql`
+      SELECT a.*,
+        json_build_object('full_name', cp.full_name, 'phone', cp.phone) AS customer,
+        json_build_object('make', v.make, 'model', v.model, 'plate_number', v.plate_number) AS vehicle
+      FROM appointments a
+      LEFT JOIN profiles cp ON cp.id = a.customer_id
+      LEFT JOIN vehicles v ON v.id = a.vehicle_id
+      WHERE a.center_id = ${centerId}
+        AND (${status || null}::text IS NULL OR a.status = ${status || null})
+        AND (${date || null}::text IS NULL OR (
+          a.requested_at >= (${date || null} || 'T00:00:00')::timestamptz
+          AND a.requested_at <= (${date || null} || 'T23:59:59')::timestamptz
+        ))
+      ORDER BY a.requested_at ASC
+    `
 
-    if (status) query = query.eq('status', status as string)
-    if (date)   query = query.gte('requested_at', `${date}T00:00:00`).lte('requested_at', `${date}T23:59:59`)
-
-    const { data, error } = await query
-    if (error) throw error
     return res.json(data)
   } catch (err) {
     console.error(err)
@@ -48,20 +49,15 @@ appointmentsRouter.post('/', requireAuth, async (req: AuthRequest, res: Response
     return res.status(400).json({ error: 'Validation failed', issues: parsed.error.flatten() })
   }
 
+  const d = parsed.data
   try {
-    const { data, error } = await db
-      .from('appointments')
-      .insert({
-        ...parsed.data,
-        center_id:   center_id || req.user!.center_id,
-        customer_id: req.user!.id,
-        status:      'pending',
-      })
-      .select()
-      .single()
+    const rows = await sql`
+      INSERT INTO appointments (center_id, customer_id, vehicle_id, requested_at, service_type, notes, status)
+      VALUES (${center_id || req.user!.center_id}, ${req.user!.id}, ${d.vehicle_id}, ${d.requested_at}, ${d.service_type ?? null}, ${d.notes ?? null}, 'pending')
+      RETURNING *
+    `
 
-    if (error) throw error
-    return res.status(201).json(data)
+    return res.status(201).json(rows[0])
   } catch (err) {
     console.error(err)
     return res.status(500).json({ error: 'Failed to create appointment' })
@@ -77,16 +73,14 @@ appointmentsRouter.patch('/:id/status', requireAuth, requireAdmin, async (req: A
   }
 
   try {
-    const { data, error } = await db
-      .from('appointments')
-      .update({ status })
-      .eq('id', req.params.id)
-      .eq('center_id', req.user!.center_id!)
-      .select()
-      .single()
+    const rows = await sql`
+      UPDATE appointments SET status = ${status}
+      WHERE id = ${req.params.id} AND center_id = ${req.user!.center_id!}
+      RETURNING *
+    `
 
-    if (error || !data) return res.status(404).json({ error: 'Appointment not found' })
-    return res.json(data)
+    if (rows.length === 0) return res.status(404).json({ error: 'Appointment not found' })
+    return res.json(rows[0])
   } catch (err) {
     console.error(err)
     return res.status(500).json({ error: 'Failed to update appointment status' })
