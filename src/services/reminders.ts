@@ -80,13 +80,10 @@ async function sendMaintenanceReminders() {
 
     let sent = 0
 
-    for (const log of (logs || []) as ReminderLog[]) {
+    for (const log of (logs || []) as unknown as ReminderLog[]) {
       // Supabase returns joined rows as arrays — take first element
-      const customerRaw = Array.isArray(log.customer) ? log.customer[0] : log.customer
-      const vehicleRaw  = Array.isArray(log.vehicle)  ? log.vehicle[0]  : log.vehicle
-
-      const customer = customerRaw as CustomerInfo | null
-      const vehicle  = vehicleRaw  as VehicleInfo  | null
+      const customer = (Array.isArray(log.customer) ? log.customer[0] : log.customer) as CustomerInfo | null
+      const vehicle  = (Array.isArray(log.vehicle)  ? log.vehicle[0]  : log.vehicle)  as VehicleInfo  | null
 
       if (!customer?.email) continue
 
