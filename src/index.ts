@@ -20,11 +20,23 @@ const app  = express()
 const PORT = process.env.PORT || 4000
 
 // ── Security & Middleware ──────────────────────────────────────
-app.use(helmet())
+// CORS must run before helmet so preflight isn't blocked
+const allowedOrigins = process.env.FRONTEND_URL
+  ? [process.env.FRONTEND_URL, ...process.env.FRONTEND_URL.replace('https://', 'https://www.').split(',')]
+  : ['*']
+
 app.use(cors({
-  origin: process.env.FRONTEND_URL || '*',
+  origin: (origin, cb) => {
+    // Allow requests with no origin (curl, mobile apps)
+    if (!origin || allowedOrigins.includes('*') || allowedOrigins.includes(origin) || origin.endsWith('.vercel.app')) {
+      cb(null, true)
+    } else {
+      cb(null, true) // allow all for now during development
+    }
+  },
   credentials: true,
 }))
+app.use(helmet({ crossOriginResourcePolicy: false }))
 app.use(morgan('dev'))
 app.use(express.json({ limit: '5mb' }))
 app.use(express.urlencoded({ extended: true }))
