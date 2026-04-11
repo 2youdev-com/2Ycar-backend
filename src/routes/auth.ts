@@ -62,9 +62,13 @@ authRouter.post('/login', async (req, res: Response) => {
         center_id: user.center_id,
       },
     })
-  } catch (err) {
-    console.error(err)
-    return res.status(500).json({ error: 'Login failed' })
+  } catch (err: unknown) {
+    console.error('Login error:', err)
+    const message = err instanceof Error ? err.message : 'Unknown error'
+    return res.status(500).json({
+      error: 'فشل تسجيل الدخول',
+      ...(process.env.NODE_ENV !== 'production' && { detail: message }),
+    })
   }
 })
 
@@ -117,9 +121,14 @@ authRouter.post('/register', async (req, res: Response) => {
         center_id: user.center_id,
       },
     })
-  } catch (err) {
-    console.error(err)
-    return res.status(500).json({ error: 'Registration failed' })
+  } catch (err: unknown) {
+    console.error('Registration error:', err)
+    const message = err instanceof Error ? err.message : 'Unknown error'
+    // Surface DB errors (e.g. missing table) in non-production for debugging
+    return res.status(500).json({
+      error: 'فشل إنشاء الحساب',
+      ...(process.env.NODE_ENV !== 'production' && { detail: message }),
+    })
   }
 })
 
