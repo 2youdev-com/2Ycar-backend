@@ -6,7 +6,8 @@
     "dev": "tsx watch src/index.ts",
     "build": "tsc",
     "start": "node dist/index.js",
-    "lint": "eslint src --ext .ts"
+    "lint": "eslint src --ext .ts",
+    "seed:admin": "tsx src/scripts/seed-admin.ts"
   },
   "dependencies": {
     "@neondatabase/serverless": "^1.0.2",
