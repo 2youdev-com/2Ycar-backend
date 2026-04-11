@@ -19,6 +19,24 @@ const partSchema = z.object({
   low_stock_threshold:  z.number().int().min(0).default(5),
 })
 
+// GET /api/v1/inventory/public — public catalog (no auth)
+inventoryRouter.get('/public', async (_req, res: Response) => {
+  const centerId = 'a1b2c3d4-0000-0000-0000-000000000001'
+
+  try {
+    const data = await sql`
+      SELECT id, name, name_ar, brand, price, unit, category, image_url, is_available
+      FROM spare_parts
+      WHERE center_id = ${centerId} AND is_available = true
+      ORDER BY category, name ASC
+    `
+    return res.json(data)
+  } catch (err) {
+    console.error(err)
+    return res.status(500).json({ error: 'Failed to fetch catalog' })
+  }
+})
+
 // GET /api/v1/inventory — list all parts
 inventoryRouter.get('/', requireAuth, async (req: AuthRequest, res: Response) => {
   const centerId = req.user!.center_id ?? req.query.center_id as string

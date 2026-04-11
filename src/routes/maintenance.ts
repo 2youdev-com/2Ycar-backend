@@ -62,6 +62,78 @@ maintenanceRouter.get('/', requireAuth, requireAdmin, async (req: AuthRequest, r
   }
 })
 
+// GET /api/v1/maintenance/my — customer's own maintenance logs
+maintenanceRouter.get('/my', requireAuth, async (req: AuthRequest, res: Response) => {
+  try {
+    const data = await sql`
+      SELECT ml.*,
+        json_build_object('make', v.make, 'model', v.model, 'plate_number', v.plate_number) AS vehicle
+      FROM maintenance_logs ml
+      LEFT JOIN vehicles v ON v.id = ml.vehicle_id
+      WHERE ml.customer_id = ${req.user!.id}
+      ORDER BY ml.date DESC
+    `
+    return res.json(data)
+  } catch (err) {
+    console.error(err)
+    return res.status(500).json({ error: 'Failed to fetch maintenance logs' })
+  }
+})
+
+// POST /api/v1/maintenance/self-log — customer logs their own maintenance
+maintenanceRouter.post('/self-log', requireAuth, async (req: AuthRequest, res: Response) => {
+  const selfLogSchema = z.object({
+    service_type:    z.enum(['oil_change','brake_service','full_service','repair','inspection','tyre_change','other']),
+    date:            z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+    mileage:         z.number().int().min(0).optional(),
+    description:     z.string().optional(),
+    notes:           z.string().optional(),
+    vehicle_make:    z.string().optional(),
+    vehicle_model:   z.string().optional(),
+    vehicle_plate:   z.string().optional(),
+    branch:          z.string().optional(),
+  })
+
+  const parsed = selfLogSchema.safeParse(req.body)
+  if (!parsed.success) {
+    return res.status(400).json({ error: 'Validation failed', issues: parsed.error.flatten() })
+  }
+
+  const d = parsed.data
+  const centerId = 'a1b2c3d4-0000-0000-0000-000000000001'
+
+  try {
+    // Try to find customer's vehicle, or create a minimal one
+    let vehicleId = null
+    const vehicles = await sql`SELECT id FROM vehicles WHERE customer_id = ${req.user!.id} LIMIT 1`
+    if (vehicles.length > 0) {
+      vehicleId = vehicles[0].id
+    } else if (d.vehicle_make && d.vehicle_model) {
+      const newVehicle = await sql`
+        INSERT INTO vehicles (customer_id, center_id, make, model, plate_number)
+        VALUES (${req.user!.id}, ${centerId}, ${d.vehicle_make}, ${d.vehicle_model}, ${d.vehicle_plate ?? null})
+        RETURNING id
+      `
+      vehicleId = newVehicle[0].id
+    }
+
+    if (!vehicleId) {
+      return res.status(400).json({ error: 'Vehicle info required (vehicle_make, vehicle_model)' })
+    }
+
+    const rows = await sql`
+      INSERT INTO maintenance_logs (center_id, vehicle_id, customer_id, date, mileage, service_type, description, notes, total_cost, status)
+      VALUES (${centerId}, ${vehicleId}, ${req.user!.id}, ${d.date}, ${d.mileage ?? null}, ${d.service_type}, ${d.description ?? null}, ${d.notes ?? null}, 0, 'pending')
+      RETURNING *
+    `
+
+    return res.status(201).json(rows[0])
+  } catch (err) {
+    console.error(err)
+    return res.status(500).json({ error: 'Failed to create maintenance log' })
+  }
+})
+
 // GET /api/v1/maintenance/:id
 maintenanceRouter.get('/:id', requireAuth, async (req: AuthRequest, res: Response) => {
   try {

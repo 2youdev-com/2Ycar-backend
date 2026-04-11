@@ -6,10 +6,17 @@ import { requireAuth, requireAdmin, AuthRequest } from '../middleware/auth'
 export const appointmentsRouter = Router()
 
 const appointmentSchema = z.object({
-  vehicle_id:   z.string().uuid(),
-  requested_at: z.string().datetime(),
-  service_type: z.string().optional(),
-  notes:        z.string().optional(),
+  vehicle_id:     z.string().uuid().optional(),
+  requested_at:   z.string().datetime(),
+  service_type:   z.string().optional(),
+  notes:          z.string().optional(),
+  branch:         z.string().optional(),
+  vehicle_make:   z.string().optional(),
+  vehicle_model:  z.string().optional(),
+  vehicle_year:   z.number().int().optional(),
+  vehicle_plate:  z.string().optional(),
+  customer_name:  z.string().optional(),
+  customer_phone: z.string().optional(),
 })
 
 // GET /api/v1/appointments
@@ -41,22 +48,37 @@ appointmentsRouter.get('/', requireAuth, requireAdmin, async (req: AuthRequest, 
   }
 })
 
+// GET /api/v1/appointments/my — customer's own appointments
+appointmentsRouter.get('/my', requireAuth, async (req: AuthRequest, res: Response) => {
+  try {
+    const data = await sql`
+      SELECT * FROM appointments
+      WHERE customer_id = ${req.user!.id}
+      ORDER BY requested_at DESC
+    `
+    return res.json(data)
+  } catch (err) {
+    console.error(err)
+    return res.status(500).json({ error: 'Failed to fetch appointments' })
+  }
+})
+
 // POST /api/v1/appointments — customer books appointment
 appointmentsRouter.post('/', requireAuth, async (req: AuthRequest, res: Response) => {
-  const { center_id, ...body } = req.body
-  const parsed = appointmentSchema.safeParse(body)
+  const parsed = appointmentSchema.safeParse(req.body)
   if (!parsed.success) {
     return res.status(400).json({ error: 'Validation failed', issues: parsed.error.flatten() })
   }
 
   const d = parsed.data
+  const centerId = req.body.center_id || req.user!.center_id || 'a1b2c3d4-0000-0000-0000-000000000001'
+
   try {
     const rows = await sql`
-      INSERT INTO appointments (center_id, customer_id, vehicle_id, requested_at, service_type, notes, status)
-      VALUES (${center_id || req.user!.center_id}, ${req.user!.id}, ${d.vehicle_id}, ${d.requested_at}, ${d.service_type ?? null}, ${d.notes ?? null}, 'pending')
+      INSERT INTO appointments (center_id, customer_id, vehicle_id, requested_at, service_type, notes, status, branch, vehicle_make, vehicle_model, vehicle_year, vehicle_plate, customer_name, customer_phone)
+      VALUES (${centerId}, ${req.user!.id}, ${d.vehicle_id ?? null}, ${d.requested_at}, ${d.service_type ?? null}, ${d.notes ?? null}, 'pending', ${d.branch ?? null}, ${d.vehicle_make ?? null}, ${d.vehicle_model ?? null}, ${d.vehicle_year ?? null}, ${d.vehicle_plate ?? null}, ${d.customer_name ?? null}, ${d.customer_phone ?? null})
       RETURNING *
     `
-
     return res.status(201).json(rows[0])
   } catch (err) {
     console.error(err)
