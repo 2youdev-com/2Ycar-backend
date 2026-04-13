@@ -15,6 +15,7 @@ import { vehiclesRouter }     from './routes/vehicles'
 import { dashboardRouter }    from './routes/dashboard'
 import { appointmentsRouter } from './routes/appointments'
 import { authRouter }         from './routes/auth'
+import { chatRouter }         from './routes/chat'
 
 const app  = express()
 const PORT = process.env.PORT || 4000
@@ -68,6 +69,7 @@ app.use(`${API}/inventory`,    inventoryRouter)
 app.use(`${API}/customers`,    customersRouter)
 app.use(`${API}/vehicles`,     vehiclesRouter)
 app.use(`${API}/appointments`, appointmentsRouter)
+app.use(`${API}/chat`,         chatRouter)
 
 // ── 404 & Error handler ────────────────────────────────────────
 app.use((_req, res) => {
