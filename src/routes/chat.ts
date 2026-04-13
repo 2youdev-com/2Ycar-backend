@@ -17,14 +17,18 @@ chatRouter.post('/', requireAuth, requireAdmin, async (req: AuthRequest, res: Re
     return res.status(400).json({ error: 'الرسالة مطلوبة' })
   }
 
+  // Only keep last 10 messages in history to avoid token limits
+  const trimmedHistory = Array.isArray(history) ? history.slice(-10) : []
+
   try {
-    const result = await processChat(message.trim(), centerId, history || [])
+    const result = await processChat(message.trim(), centerId, trimmedHistory)
     return res.json(result)
-  } catch (err) {
-    console.error('[Chat] Error:', err)
+  } catch (err: unknown) {
+    const errMsg = err instanceof Error ? err.message : 'Unknown error'
+    console.error('[Chat] Error:', errMsg)
     return res.status(500).json({
       error: 'فشل معالجة الرسالة',
-      reply: 'عذراً، حصلت مشكلة. حاول تاني.',
+      reply: `عذراً، حصلت مشكلة: ${errMsg}`,
     })
   }
 })
