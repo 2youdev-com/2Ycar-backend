@@ -710,6 +710,287 @@ async function executeTool(name: string, args: Record<string, unknown>, centerId
   }
 }
 
+// ── Customer Tools (scoped to the authenticated customer) ───────
+
+const customerTools = [
+  {
+    function_declarations: [
+      {
+        name: 'get_my_profile',
+        description: 'احصل على بيانات حسابك الشخصية (الاسم، الإيميل، الهاتف)',
+        parameters: { type: 'object', properties: {}, required: [] },
+      },
+      {
+        name: 'update_my_profile',
+        description: 'عدّل بياناتك الشخصية (الاسم أو الهاتف)',
+        parameters: {
+          type: 'object',
+          properties: {
+            full_name: { type: 'string', description: 'الاسم الجديد' },
+            phone: { type: 'string', description: 'رقم الهاتف الجديد' },
+          },
+          required: [],
+        },
+      },
+      {
+        name: 'list_my_vehicles',
+        description: 'اعرض قائمة سياراتك المسجلة في المركز',
+        parameters: { type: 'object', properties: {}, required: [] },
+      },
+      {
+        name: 'add_my_vehicle',
+        description: 'أضف سيارة جديدة لحسابك',
+        parameters: {
+          type: 'object',
+          properties: {
+            make: { type: 'string', description: 'الماركة (مثل: تويوتا، بي ام دبليو)' },
+            model: { type: 'string', description: 'الموديل (مثل: كامري، 320i)' },
+            year: { type: 'number', description: 'سنة الصنع' },
+            color: { type: 'string', description: 'اللون' },
+            plate_number: { type: 'string', description: 'رقم اللوحة' },
+          },
+          required: ['make', 'model'],
+        },
+      },
+      {
+        name: 'list_my_maintenance',
+        description: 'اعرض سجل الصيانات بتاعتك (كل الصيانات أو فلترة بسيارة معينة أو حالة معينة)',
+        parameters: {
+          type: 'object',
+          properties: {
+            vehicle_id: { type: 'string', description: 'فلترة حسب سيارة معينة' },
+            status: { type: 'string', enum: ['pending', 'in_progress', 'completed', 'cancelled'], description: 'فلترة حسب الحالة' },
+          },
+          required: [],
+        },
+      },
+      {
+        name: 'get_my_maintenance_details',
+        description: 'احصل على تفاصيل سجل صيانة معين (القطع المستخدمة، التكلفة، الملاحظات)',
+        parameters: {
+          type: 'object',
+          properties: {
+            log_id: { type: 'string', description: 'معرف سجل الصيانة UUID' },
+          },
+          required: ['log_id'],
+        },
+      },
+      {
+        name: 'list_my_appointments',
+        description: 'اعرض قائمة مواعيدك (الحجوزات) - كلها أو حسب الحالة',
+        parameters: {
+          type: 'object',
+          properties: {
+            status: { type: 'string', enum: ['pending', 'confirmed', 'cancelled', 'completed'], description: 'فلترة حسب الحالة' },
+          },
+          required: [],
+        },
+      },
+      {
+        name: 'book_appointment',
+        description: 'احجز موعد صيانة جديد. لو العميل عنده سيارة مسجلة ممكن تستخدم vehicle_id، لو لا استخدم بيانات السيارة (vehicle_make/model/year/plate). الوقت لازم يكون ISO datetime (مثل 2026-04-25T10:00:00). نوع الخدمة من: oil_change, brake_service, full_service, repair, inspection, tyre_change, other. الفرع من: saad-zaghloul أو suez-canal',
+        parameters: {
+          type: 'object',
+          properties: {
+            requested_at: { type: 'string', description: 'التاريخ والوقت بصيغة ISO (YYYY-MM-DDTHH:mm:ss)' },
+            service_type: { type: 'string', enum: ['oil_change', 'brake_service', 'full_service', 'repair', 'inspection', 'tyre_change', 'other'], description: 'نوع الخدمة' },
+            branch: { type: 'string', enum: ['saad-zaghloul', 'suez-canal'], description: 'الفرع' },
+            vehicle_id: { type: 'string', description: 'معرف سيارة مسجلة (اختياري لو عنده سيارة مسجلة)' },
+            vehicle_make: { type: 'string', description: 'ماركة السيارة لو مش مسجلة' },
+            vehicle_model: { type: 'string', description: 'موديل السيارة' },
+            vehicle_year: { type: 'number', description: 'سنة الصنع' },
+            vehicle_plate: { type: 'string', description: 'رقم اللوحة' },
+            notes: { type: 'string', description: 'ملاحظات أو وصف المشكلة' },
+          },
+          required: ['requested_at', 'service_type', 'branch'],
+        },
+      },
+      {
+        name: 'cancel_my_appointment',
+        description: 'ألغِ موعد من مواعيدك',
+        parameters: {
+          type: 'object',
+          properties: {
+            appointment_id: { type: 'string', description: 'معرف الموعد UUID' },
+          },
+          required: ['appointment_id'],
+        },
+      },
+      {
+        name: 'list_available_parts',
+        description: 'اعرض قطع الغيار والمنتجات المتاحة في المركز مع أسعارها (للاستفسار)',
+        parameters: {
+          type: 'object',
+          properties: {
+            search: { type: 'string', description: 'بحث بالاسم' },
+            category: { type: 'string', description: 'فلترة حسب الفئة (oil, filter, brake, tyre, other)' },
+          },
+          required: [],
+        },
+      },
+    ],
+  },
+]
+
+async function executeCustomerTool(
+  name: string,
+  args: Record<string, unknown>,
+  customerId: string,
+  centerId: string,
+): Promise<unknown> {
+  switch (name) {
+    case 'get_my_profile': {
+      const rows = await sql`
+        SELECT id, full_name, email, phone, avatar_url, created_at
+        FROM profiles WHERE id = ${customerId}
+      `
+      return rows[0] ?? { error: 'الحساب غير موجود' }
+    }
+
+    case 'update_my_profile': {
+      const { full_name, phone } = args as { full_name?: string; phone?: string }
+      const rows = await sql`
+        UPDATE profiles SET
+          full_name = COALESCE(${full_name ?? null}, full_name),
+          phone = COALESCE(${phone ?? null}, phone)
+        WHERE id = ${customerId}
+        RETURNING id, full_name, email, phone
+      `
+      return { success: true, profile: rows[0] }
+    }
+
+    case 'list_my_vehicles': {
+      const data = await sql`
+        SELECT id, make, model, year, color, plate_number, vin, created_at
+        FROM vehicles WHERE customer_id = ${customerId}
+        ORDER BY created_at DESC
+      `
+      return { vehicles: data }
+    }
+
+    case 'add_my_vehicle': {
+      const { make, model, year, color, plate_number } = args as {
+        make: string; model: string; year?: number; color?: string; plate_number?: string
+      }
+      const rows = await sql`
+        INSERT INTO vehicles (customer_id, center_id, make, model, year, color, plate_number)
+        VALUES (${customerId}, ${centerId}, ${make}, ${model}, ${year ?? null}, ${color ?? null}, ${plate_number ?? null})
+        RETURNING *
+      `
+      return { success: true, vehicle: rows[0] }
+    }
+
+    case 'list_my_maintenance': {
+      const { vehicle_id, status } = args as { vehicle_id?: string; status?: string }
+      const data = await sql`
+        SELECT ml.id, ml.date, ml.service_type, ml.description, ml.total_cost, ml.status, ml.mileage, ml.next_service_date, ml.next_service_km,
+          json_build_object('id', v.id, 'make', v.make, 'model', v.model, 'plate_number', v.plate_number) AS vehicle
+        FROM maintenance_logs ml
+        LEFT JOIN vehicles v ON v.id = ml.vehicle_id
+        WHERE ml.customer_id = ${customerId}
+          AND (${vehicle_id || null}::text IS NULL OR ml.vehicle_id = ${vehicle_id || null}::uuid)
+          AND (${status || null}::text IS NULL OR ml.status = ${status || null})
+        ORDER BY ml.date DESC
+        LIMIT 50
+      `
+      return { logs: data }
+    }
+
+    case 'get_my_maintenance_details': {
+      const { log_id } = args as { log_id: string }
+      const rows = await sql`
+        SELECT ml.*,
+          json_build_object('make', v.make, 'model', v.model, 'plate_number', v.plate_number) AS vehicle,
+          COALESCE(
+            (SELECT json_agg(json_build_object('part_name', mlp.part_name, 'quantity_used', mlp.quantity_used, 'unit_price', mlp.unit_price, 'total_price', mlp.total_price))
+             FROM maintenance_log_parts mlp WHERE mlp.log_id = ml.id),
+            '[]'::json
+          ) AS parts
+        FROM maintenance_logs ml
+        LEFT JOIN vehicles v ON v.id = ml.vehicle_id
+        WHERE ml.id = ${log_id} AND ml.customer_id = ${customerId}
+      `
+      if (rows.length === 0) return { error: 'سجل الصيانة غير موجود أو مش بتاعك' }
+      return rows[0]
+    }
+
+    case 'list_my_appointments': {
+      const { status } = args as { status?: string }
+      const data = await sql`
+        SELECT a.*,
+          json_build_object('make', v.make, 'model', v.model, 'plate_number', v.plate_number) AS vehicle
+        FROM appointments a
+        LEFT JOIN vehicles v ON v.id = a.vehicle_id
+        WHERE a.customer_id = ${customerId}
+          AND (${status || null}::text IS NULL OR a.status = ${status || null})
+        ORDER BY a.requested_at DESC
+      `
+      return { appointments: data }
+    }
+
+    case 'book_appointment': {
+      const {
+        requested_at, service_type, branch, vehicle_id,
+        vehicle_make, vehicle_model, vehicle_year, vehicle_plate, notes,
+      } = args as {
+        requested_at: string; service_type: string; branch: string
+        vehicle_id?: string; vehicle_make?: string; vehicle_model?: string
+        vehicle_year?: number; vehicle_plate?: string; notes?: string
+      }
+
+      const profile = await sql`SELECT full_name, phone FROM profiles WHERE id = ${customerId}`
+      const customerName = profile[0]?.full_name ?? null
+      const customerPhone = profile[0]?.phone ?? null
+
+      const rows = await sql`
+        INSERT INTO appointments (
+          center_id, customer_id, vehicle_id, requested_at, service_type, notes, status,
+          branch, vehicle_make, vehicle_model, vehicle_year, vehicle_plate, customer_name, customer_phone
+        )
+        VALUES (
+          ${centerId}, ${customerId}, ${vehicle_id ?? null}, ${requested_at}, ${service_type},
+          ${notes ?? null}, 'pending',
+          ${branch}, ${vehicle_make ?? null}, ${vehicle_model ?? null},
+          ${vehicle_year ?? null}, ${vehicle_plate ?? null},
+          ${customerName}, ${customerPhone}
+        )
+        RETURNING *
+      `
+      return { success: true, appointment: rows[0] }
+    }
+
+    case 'cancel_my_appointment': {
+      const { appointment_id } = args as { appointment_id: string }
+      const rows = await sql`
+        UPDATE appointments SET status = 'cancelled'
+        WHERE id = ${appointment_id} AND customer_id = ${customerId}
+          AND status IN ('pending', 'confirmed')
+        RETURNING *
+      `
+      if (rows.length === 0) return { error: 'الموعد مش موجود أو ملغي بالفعل' }
+      return { success: true, appointment: rows[0] }
+    }
+
+    case 'list_available_parts': {
+      const { search, category } = args as { search?: string; category?: string }
+      const data = await sql`
+        SELECT id, name, name_ar, brand, price, unit, category,
+          CASE WHEN quantity > 0 THEN true ELSE false END AS in_stock
+        FROM spare_parts
+        WHERE center_id = ${centerId} AND is_available = true
+          AND (${category || null}::text IS NULL OR category = ${category || null})
+          AND (${search || null}::text IS NULL OR name ILIKE ${'%' + (search || '') + '%'} OR name_ar ILIKE ${'%' + (search || '') + '%'})
+        ORDER BY name_ar NULLS LAST, name ASC
+        LIMIT 50
+      `
+      return { parts: data }
+    }
+
+    default:
+      return { error: `أداة غير معروفة: ${name}` }
+  }
+}
+
 // ── System Prompt ───────────────────────────────────────────────
 
 const SYSTEM_PROMPT = `أنت مساعد ذكي لمركز صيانة سيارات اسمه "العمرتي". أنت تساعد صاحب المركز في إدارة المركز بالكامل.
@@ -843,6 +1124,146 @@ export async function processChat(
     }
 
     // Add model response and function results to conversation
+    currentContents = [
+      ...currentContents,
+      { role: 'model' as const, parts },
+      { role: 'user' as const, parts: functionResponses },
+    ]
+  }
+
+  return {
+    reply: 'عذراً، الطلب معقد شوية. ممكن تبسّطه أو تقسّمه لأجزاء أصغر؟',
+    history: [...history, { role: 'user', parts: [{ text: message }] }],
+  }
+}
+
+// ── Customer Chat ───────────────────────────────────────────────
+
+const CUSTOMER_SYSTEM_PROMPT = `أنت مساعد ذكي لعملاء مركز صيانة السيارات "العمرتي". أنت بتساعد العميل يدير حسابه ويحجز مواعيد.
+
+## قدراتك:
+- عرض بيانات الحساب الشخصية للعميل (اسمه، إيميله، هاتفه)
+- تعديل بياناته الشخصية (الاسم، الهاتف)
+- عرض سياراته المسجلة وإضافة سيارات جديدة
+- عرض سجل صيانات سياراته وتفاصيلها (القطع المستخدمة، التكلفة، إلخ)
+- عرض المواعيد السابقة والحالية
+- حجز موعد جديد
+- إلغاء موعد
+- الاستفسار عن قطع الغيار المتاحة وأسعارها
+
+## قواعد مهمة جداً:
+1. رد دايماً بالعربي (مصري/عامي، ودود ومحترف)
+2. أنت بتتعامل مع العميل نفسه - أي بيانات تعرضها لازم تبقى بتاعته هو بس
+3. متخمنش - استخدم الأدوات عشان تجيب البيانات الفعلية
+4. لما العميل يطلب حجز موعد:
+   - اتأكد إن عندك: التاريخ + الوقت + الفرع + نوع الخدمة
+   - لو ناقص حاجة، اسأله عليها بلطف
+   - الفروع المتاحة: فرع شارع سعد زغلول (saad-zaghloul) - فرع شارع قناة السويس (suez-canal)
+   - التاريخ والوقت يتحطوا في ISO format: مثلاً 2026-04-25T10:00:00
+   - لو العميل قال "بكره الساعة 10 الصبح"، احسب التاريخ (النهارده ${new Date().toISOString().slice(0, 10)})
+5. لو العميل عنده سياراته مسجلة، اعرضها له ليختار. لو السيارة مش مسجلة، اسأل عن بياناتها (ماركة، موديل، لوحة)
+6. قبل الإلغاء أو تعديل مهم، اتأكد من العميل
+7. نسّق الأرقام والفلوس بوضوح
+8. استخدم الإيموجي باعتدال ✅ 📅 🚗 💰
+
+## أنواع الخدمات:
+- oil_change: تغيير زيت
+- brake_service: صيانة فرامل
+- full_service: صيانة شاملة
+- repair: إصلاح
+- inspection: فحص
+- tyre_change: تغيير إطارات
+- other: أخرى
+
+## حالات المواعيد:
+- pending: في الانتظار
+- confirmed: مؤكد
+- cancelled: ملغي
+- completed: مكتمل
+
+## ملاحظة مهمة:
+تاريخ النهارده: ${new Date().toISOString().slice(0, 10)}`
+
+const DEFAULT_CENTER_ID = 'a1b2c3d4-0000-0000-0000-000000000001'
+
+export async function processCustomerChat(
+  message: string,
+  customerId: string,
+  centerId: string | null,
+  history: ChatMessage[] = []
+): Promise<{ reply: string; history: ChatMessage[] }> {
+  const effectiveCenterId = centerId ?? DEFAULT_CENTER_ID
+
+  const contents = [
+    ...history,
+    { role: 'user' as const, parts: [{ text: message }] },
+  ]
+
+  let currentContents = contents
+  let maxIterations = 10
+
+  while (maxIterations-- > 0) {
+    const response = await fetch(GEMINI_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        system_instruction: { parts: [{ text: CUSTOMER_SYSTEM_PROMPT }] },
+        contents: currentContents,
+        tools: customerTools,
+        tool_config: { function_calling_config: { mode: 'AUTO' } },
+      }),
+    })
+
+    if (!response.ok) {
+      const err = await response.text()
+      console.error('Gemini API error:', err)
+      throw new Error('فشل الاتصال بالذكاء الاصطناعي')
+    }
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const data: any = await response.json()
+    const candidate = data.candidates?.[0]
+
+    if (!candidate?.content?.parts) {
+      throw new Error('رد غير متوقع من الذكاء الاصطناعي')
+    }
+
+    const parts = candidate.content.parts
+    const functionCalls = parts.filter((p: { functionCall?: unknown }) => p.functionCall)
+
+    if (functionCalls.length === 0) {
+      const textPart = parts.find((p: { text?: string }) => p.text)
+      const reply = textPart?.text || 'عذراً، مقدرتش أفهم الطلب.'
+
+      const updatedHistory: ChatMessage[] = [
+        ...history,
+        { role: 'user', parts: [{ text: message }] },
+        { role: 'model', parts: [{ text: reply }] },
+      ]
+
+      return { reply, history: updatedHistory }
+    }
+
+    const functionResponses = []
+    for (const fc of functionCalls) {
+      const { name, args } = fc.functionCall
+      console.log(`[CustomerChat] Executing tool: ${name}`, args)
+      try {
+        const result = await executeCustomerTool(name, args || {}, customerId, effectiveCenterId)
+        functionResponses.push({
+          functionResponse: { name, response: { result } },
+        })
+      } catch (err) {
+        console.error(`[CustomerChat] Tool error (${name}):`, err)
+        functionResponses.push({
+          functionResponse: {
+            name,
+            response: { error: `فشل تنفيذ الأداة: ${err instanceof Error ? err.message : 'خطأ غير معروف'}` },
+          },
+        })
+      }
+    }
+
     currentContents = [
       ...currentContents,
       { role: 'model' as const, parts },
