@@ -20,6 +20,9 @@ import { chatRouter }         from './routes/chat'
 const app  = express()
 const PORT = process.env.PORT || 4000
 
+// Trust Vercel's edge proxy so req.ip and rate-limiter see the real client IP
+app.set('trust proxy', 1)
+
 // ── Security & Middleware ──────────────────────────────────────
 // CORS must run before helmet so preflight isn't blocked
 const allowedOrigins = process.env.FRONTEND_URL
