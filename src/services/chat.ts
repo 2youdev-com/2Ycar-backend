@@ -1068,9 +1068,22 @@ export async function processChat(
     })
 
     if (!response.ok) {
-      const err = await response.text()
-      console.error('Gemini API error:', err)
-      throw new Error('فشل الاتصال بالذكاء الاصطناعي')
+      const errText = await response.text()
+      console.error(`Gemini API error [${response.status}]:`, errText)
+
+      let detail = errText
+      try {
+        const parsed = JSON.parse(errText)
+        detail = parsed?.error?.message || errText
+      } catch {}
+
+      if (response.status === 429) {
+        throw new Error('تم استهلاك الحد المسموح من الذكاء الاصطناعي مؤقتاً، جرّب بعد دقيقة')
+      }
+      if (response.status === 401 || response.status === 403) {
+        throw new Error('مفتاح Gemini API غير صالح أو منتهي')
+      }
+      throw new Error(`فشل الاتصال بالذكاء الاصطناعي (${response.status}): ${detail.slice(0, 200)}`)
     }
 
     const data: any = await response.json()
@@ -1215,9 +1228,22 @@ export async function processCustomerChat(
     })
 
     if (!response.ok) {
-      const err = await response.text()
-      console.error('Gemini API error:', err)
-      throw new Error('فشل الاتصال بالذكاء الاصطناعي')
+      const errText = await response.text()
+      console.error(`Gemini API error [${response.status}]:`, errText)
+
+      let detail = errText
+      try {
+        const parsed = JSON.parse(errText)
+        detail = parsed?.error?.message || errText
+      } catch {}
+
+      if (response.status === 429) {
+        throw new Error('تم استهلاك الحد المسموح من الذكاء الاصطناعي مؤقتاً، جرّب بعد دقيقة')
+      }
+      if (response.status === 401 || response.status === 403) {
+        throw new Error('مفتاح Gemini API غير صالح أو منتهي')
+      }
+      throw new Error(`فشل الاتصال بالذكاء الاصطناعي (${response.status}): ${detail.slice(0, 200)}`)
     }
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
