@@ -3,68 +3,149 @@ import { requireAuth, requireAdmin, AuthRequest } from '../middleware/auth'
 import { processChat, processCustomerChat } from '../services/chat'
 import {
   appendChatExchange,
-  clearChatHistory,
-  getChatRows,
-  getModelHistory,
+  ChatContext,
+  createSession,
+  deleteSession,
+  getSessionModelHistory,
+  getSessionRows,
+  listSessions,
   toDisplayMessages,
-  toModelHistory,
 } from '../services/chatHistory'
 
 export const chatRouter = Router()
 
-// GET /api/v1/chat/history - persisted admin AI assistant messages
-chatRouter.get('/history', requireAuth, requireAdmin, async (req: AuthRequest, res: Response) => {
-  try {
-    const rows = await getChatRows(req.user!.id, 'admin')
-    return res.json({
-      messages: toDisplayMessages(rows),
-      history: toModelHistory(rows),
-    })
-  } catch (err) {
-    console.error('[ChatHistory] Failed to load admin history:', err)
-    return res.status(500).json({ error: 'Failed to load chat history' })
-  }
-})
+// ── helpers ─────────────────────────────────────────────────────
 
-// DELETE /api/v1/chat/history - clear persisted admin AI assistant messages
-chatRouter.delete('/history', requireAuth, requireAdmin, async (req: AuthRequest, res: Response) => {
+async function handleListSessions(
+  req: AuthRequest,
+  res: Response,
+  context: ChatContext,
+) {
   try {
-    await clearChatHistory(req.user!.id, 'admin')
-    return res.json({ success: true, messages: [], history: [] })
+    const sessions = await listSessions(req.user!.id, context)
+    return res.json({ sessions })
   } catch (err) {
-    console.error('[ChatHistory] Failed to clear admin history:', err)
-    return res.status(500).json({ error: 'Failed to clear chat history' })
+    console.error(`[ChatSessions:${context}] Failed to list:`, err)
+    return res.status(500).json({ error: 'Failed to load chat sessions' })
   }
-})
+}
 
-// POST /api/v1/chat — send a message to the AI assistant (admin)
+async function handleCreateSession(
+  req: AuthRequest,
+  res: Response,
+  context: ChatContext,
+) {
+  try {
+    const session = await createSession(req.user!.id, context)
+    return res.status(201).json({ session })
+  } catch (err) {
+    console.error(`[ChatSessions:${context}] Failed to create:`, err)
+    return res.status(500).json({ error: 'Failed to create chat session' })
+  }
+}
+
+async function handleGetSession(
+  req: AuthRequest,
+  res: Response,
+  context: ChatContext,
+) {
+  const sessionId = req.params.id
+  try {
+    const rows = await getSessionRows(sessionId, req.user!.id, context)
+    if (rows === null) {
+      return res.status(404).json({ error: 'الشات مش موجود' })
+    }
+    return res.json({ messages: toDisplayMessages(rows) })
+  } catch (err) {
+    console.error(`[ChatSessions:${context}] Failed to load session ${sessionId}:`, err)
+    return res.status(500).json({ error: 'Failed to load chat session' })
+  }
+}
+
+async function handleDeleteSession(
+  req: AuthRequest,
+  res: Response,
+  context: ChatContext,
+) {
+  const sessionId = req.params.id
+  try {
+    const ok = await deleteSession(sessionId, req.user!.id, context)
+    if (!ok) {
+      return res.status(404).json({ error: 'الشات مش موجود' })
+    }
+    return res.json({ success: true })
+  } catch (err) {
+    console.error(`[ChatSessions:${context}] Failed to delete session ${sessionId}:`, err)
+    return res.status(500).json({ error: 'Failed to delete chat session' })
+  }
+}
+
+// ── Admin chat ──────────────────────────────────────────────────
+
+chatRouter.get('/sessions', requireAuth, requireAdmin, (req: AuthRequest, res) =>
+  handleListSessions(req, res, 'admin'),
+)
+
+chatRouter.post('/sessions', requireAuth, requireAdmin, (req: AuthRequest, res) =>
+  handleCreateSession(req, res, 'admin'),
+)
+
+chatRouter.get('/sessions/:id', requireAuth, requireAdmin, (req: AuthRequest, res) =>
+  handleGetSession(req, res, 'admin'),
+)
+
+chatRouter.delete('/sessions/:id', requireAuth, requireAdmin, (req: AuthRequest, res) =>
+  handleDeleteSession(req, res, 'admin'),
+)
+
 chatRouter.post('/', requireAuth, requireAdmin, async (req: AuthRequest, res: Response) => {
   const centerId = req.user!.center_id
   if (!centerId) {
     return res.status(400).json({ error: 'لا يوجد مركز مرتبط بهذا الحساب' })
   }
 
-  const { message } = req.body
+  const { message, sessionId: rawSessionId } = req.body as {
+    message?: unknown
+    sessionId?: unknown
+  }
 
   if (!message || typeof message !== 'string' || message.trim().length === 0) {
     return res.status(400).json({ error: 'الرسالة مطلوبة' })
   }
 
+  const trimmedMessage = message.trim()
+
   try {
-    const trimmedHistory = await getModelHistory(req.user!.id, 'admin', 10)
-    const result = await processChat(message.trim(), centerId, trimmedHistory)
+    let sessionId =
+      typeof rawSessionId === 'string' && rawSessionId.length > 0 ? rawSessionId : null
+
+    if (sessionId) {
+      const exists = await getSessionRows(sessionId, req.user!.id, 'admin')
+      if (exists === null) sessionId = null
+    }
+
+    if (!sessionId) {
+      const newSession = await createSession(req.user!.id, 'admin')
+      sessionId = newSession.id
+    }
+
+    const trimmedHistory = await getSessionModelHistory(sessionId, req.user!.id, 'admin', 10)
+    const result = await processChat(trimmedMessage, centerId, trimmedHistory)
+
     await appendChatExchange({
+      sessionId,
       profileId: req.user!.id,
       centerId,
       context: 'admin',
-      userMessage: message.trim(),
+      userMessage: trimmedMessage,
       assistantMessage: result.reply,
     })
-    const rows = await getChatRows(req.user!.id, 'admin')
+
+    const rows = await getSessionRows(sessionId, req.user!.id, 'admin')
     return res.json({
-      ...result,
-      messages: toDisplayMessages(rows),
-      history: toModelHistory(rows),
+      reply: result.reply,
+      sessionId,
+      messages: toDisplayMessages(rows ?? []),
     })
   } catch (err: unknown) {
     const errMsg = err instanceof Error ? err.message : 'Unknown error'
@@ -76,71 +157,86 @@ chatRouter.post('/', requireAuth, requireAdmin, async (req: AuthRequest, res: Re
   }
 })
 
-// GET /api/v1/chat/customer/history - persisted customer AI assistant messages
-chatRouter.get('/customer/history', requireAuth, async (req: AuthRequest, res: Response) => {
-  if (req.user!.role !== 'customer') {
-    return res.status(403).json({ error: 'Customer chat only' })
-  }
+// ── Customer chat ───────────────────────────────────────────────
 
-  try {
-    const rows = await getChatRows(req.user!.id, 'customer')
-    return res.json({
-      messages: toDisplayMessages(rows),
-      history: toModelHistory(rows),
-    })
-  } catch (err) {
-    console.error('[CustomerChatHistory] Failed to load history:', err)
-    return res.status(500).json({ error: 'Failed to load chat history' })
+function requireCustomer(req: AuthRequest, res: Response): boolean {
+  if (req.user!.role !== 'customer') {
+    res.status(403).json({ error: 'هذه الخدمة متاحة للعملاء فقط' })
+    return false
   }
+  return true
+}
+
+chatRouter.get('/customer/sessions', requireAuth, (req: AuthRequest, res) => {
+  if (!requireCustomer(req, res)) return
+  return handleListSessions(req, res, 'customer')
 })
 
-// DELETE /api/v1/chat/customer/history - clear persisted customer AI assistant messages
-chatRouter.delete('/customer/history', requireAuth, async (req: AuthRequest, res: Response) => {
-  if (req.user!.role !== 'customer') {
-    return res.status(403).json({ error: 'Customer chat only' })
-  }
-
-  try {
-    await clearChatHistory(req.user!.id, 'customer')
-    return res.json({ success: true, messages: [], history: [] })
-  } catch (err) {
-    console.error('[CustomerChatHistory] Failed to clear history:', err)
-    return res.status(500).json({ error: 'Failed to clear chat history' })
-  }
+chatRouter.post('/customer/sessions', requireAuth, (req: AuthRequest, res) => {
+  if (!requireCustomer(req, res)) return
+  return handleCreateSession(req, res, 'customer')
 })
 
-// POST /api/v1/chat/customer - customer AI assistant (scoped to the customer's own data)
+chatRouter.get('/customer/sessions/:id', requireAuth, (req: AuthRequest, res) => {
+  if (!requireCustomer(req, res)) return
+  return handleGetSession(req, res, 'customer')
+})
+
+chatRouter.delete('/customer/sessions/:id', requireAuth, (req: AuthRequest, res) => {
+  if (!requireCustomer(req, res)) return
+  return handleDeleteSession(req, res, 'customer')
+})
+
 chatRouter.post('/customer', requireAuth, async (req: AuthRequest, res: Response) => {
-  if (req.user!.role !== 'customer') {
-    return res.status(403).json({ error: 'هذه الخدمة متاحة للعملاء فقط' })
-  }
+  if (!requireCustomer(req, res)) return
 
-  const { message } = req.body
+  const { message, sessionId: rawSessionId } = req.body as {
+    message?: unknown
+    sessionId?: unknown
+  }
 
   if (!message || typeof message !== 'string' || message.trim().length === 0) {
     return res.status(400).json({ error: 'الرسالة مطلوبة' })
   }
 
+  const trimmedMessage = message.trim()
+
   try {
-    const trimmedHistory = await getModelHistory(req.user!.id, 'customer', 10)
+    let sessionId =
+      typeof rawSessionId === 'string' && rawSessionId.length > 0 ? rawSessionId : null
+
+    if (sessionId) {
+      const exists = await getSessionRows(sessionId, req.user!.id, 'customer')
+      if (exists === null) sessionId = null
+    }
+
+    if (!sessionId) {
+      const newSession = await createSession(req.user!.id, 'customer')
+      sessionId = newSession.id
+    }
+
+    const trimmedHistory = await getSessionModelHistory(sessionId, req.user!.id, 'customer', 10)
     const result = await processCustomerChat(
-      message.trim(),
+      trimmedMessage,
       req.user!.id,
       req.user!.center_id,
       trimmedHistory,
     )
+
     await appendChatExchange({
+      sessionId,
       profileId: req.user!.id,
       centerId: req.user!.center_id,
       context: 'customer',
-      userMessage: message.trim(),
+      userMessage: trimmedMessage,
       assistantMessage: result.reply,
     })
-    const rows = await getChatRows(req.user!.id, 'customer')
+
+    const rows = await getSessionRows(sessionId, req.user!.id, 'customer')
     return res.json({
-      ...result,
-      messages: toDisplayMessages(rows),
-      history: toModelHistory(rows),
+      reply: result.reply,
+      sessionId,
+      messages: toDisplayMessages(rows ?? []),
     })
   } catch (err: unknown) {
     const errMsg = err instanceof Error ? err.message : 'Unknown error'

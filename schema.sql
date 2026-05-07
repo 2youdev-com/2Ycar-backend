@@ -145,11 +145,26 @@ CREATE TABLE appointments (
 );
 
 -- ============================================================
+-- CHAT_SESSIONS TABLE
+-- Each AI chat session (conversation) per account and role context
+-- ============================================================
+CREATE TABLE chat_sessions (
+  id          UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  profile_id  UUID NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+  context     TEXT NOT NULL
+              CHECK (context IN ('admin', 'customer')),
+  title       TEXT,
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- ============================================================
 -- CHAT_MESSAGES TABLE
--- Persisted AI assistant conversations per account and role context
+-- Persisted AI assistant messages, grouped by session
 -- ============================================================
 CREATE TABLE chat_messages (
   id          UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  session_id  UUID NOT NULL REFERENCES chat_sessions(id) ON DELETE CASCADE,
   profile_id  UUID NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
   center_id   UUID REFERENCES centers(id) ON DELETE SET NULL,
   context     TEXT NOT NULL
@@ -173,6 +188,10 @@ CREATE INDEX idx_parts_center         ON spare_parts(center_id);
 CREATE INDEX idx_parts_available      ON spare_parts(is_available);
 CREATE INDEX idx_appointments_center  ON appointments(center_id);
 CREATE INDEX idx_appointments_date    ON appointments(requested_at);
+CREATE INDEX idx_chat_sessions_profile_context_updated
+  ON chat_sessions(profile_id, context, updated_at DESC);
+CREATE INDEX idx_chat_messages_session_created
+  ON chat_messages(session_id, created_at);
 CREATE INDEX idx_chat_messages_profile_context_created
   ON chat_messages(profile_id, context, created_at);
 CREATE INDEX idx_chat_messages_center ON chat_messages(center_id);
