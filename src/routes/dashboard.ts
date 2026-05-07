@@ -23,7 +23,15 @@ dashboardRouter.get('/stats', requireAuth, requireAdmin, async (req: AuthRequest
       lastMonthLogs,
       totalLogsResult,
     ] = await Promise.all([
-      sql`SELECT COUNT(*)::int AS count FROM profiles WHERE role = 'customer'`,
+      sql`
+        SELECT COUNT(DISTINCT customer_id)::int AS count FROM (
+          SELECT customer_id FROM vehicles WHERE center_id = ${centerId}
+          UNION
+          SELECT customer_id FROM maintenance_logs WHERE center_id = ${centerId}
+          UNION
+          SELECT customer_id FROM appointments WHERE center_id = ${centerId}
+        ) AS center_customers
+      `,
       sql`SELECT COUNT(*)::int AS count FROM appointments WHERE center_id = ${centerId} AND status = 'pending'`,
       sql`SELECT id, name, quantity, low_stock_threshold FROM spare_parts WHERE center_id = ${centerId} AND quantity <= low_stock_threshold`,
       sql`SELECT total_cost FROM maintenance_logs WHERE center_id = ${centerId} AND date >= ${thisMonth}::date`,

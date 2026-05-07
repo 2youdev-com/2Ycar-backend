@@ -21,11 +21,16 @@ customersRouter.get('/', requireAuth, requireAdmin, async (req: AuthRequest, res
 
   try {
     const data = await sql`
-      SELECT DISTINCT p.id, p.full_name, p.phone, p.email, p.avatar_url, p.created_at
+      SELECT p.id, p.full_name, p.phone, p.email, p.avatar_url, p.created_at
       FROM profiles p
-      JOIN vehicles v ON v.customer_id = p.id
-      WHERE v.center_id = ${centerId}
-        AND p.role = 'customer'
+      WHERE p.role = 'customer'
+        AND p.id IN (
+          SELECT customer_id FROM vehicles WHERE center_id = ${centerId}
+          UNION
+          SELECT customer_id FROM maintenance_logs WHERE center_id = ${centerId}
+          UNION
+          SELECT customer_id FROM appointments WHERE center_id = ${centerId}
+        )
         AND (${search || null}::text IS NULL OR p.full_name ILIKE ${'%' + (search || '') + '%'})
       ORDER BY p.full_name ASC
       LIMIT ${+limit} OFFSET ${offset}

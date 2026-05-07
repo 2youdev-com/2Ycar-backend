@@ -345,7 +345,15 @@ async function executeTool(name: string, args: Record<string, unknown>, centerId
       const lastMonthEnd = new Date(now.getFullYear(), now.getMonth(), 0).toISOString()
 
       const [customers, appointments, lowStock, thisMonthLogs, lastMonthLogs, totalLogs] = await Promise.all([
-        sql`SELECT COUNT(*)::int AS count FROM profiles WHERE role = 'customer'`,
+        sql`
+          SELECT COUNT(DISTINCT customer_id)::int AS count FROM (
+            SELECT customer_id FROM vehicles WHERE center_id = ${centerId}
+            UNION
+            SELECT customer_id FROM maintenance_logs WHERE center_id = ${centerId}
+            UNION
+            SELECT customer_id FROM appointments WHERE center_id = ${centerId}
+          ) AS center_customers
+        `,
         sql`SELECT COUNT(*)::int AS count FROM appointments WHERE center_id = ${centerId} AND status = 'pending'`,
         sql`SELECT id, name, quantity, low_stock_threshold FROM spare_parts WHERE center_id = ${centerId} AND quantity <= low_stock_threshold`,
         sql`SELECT total_cost FROM maintenance_logs WHERE center_id = ${centerId} AND date >= ${thisMonth}::date`,
@@ -391,11 +399,16 @@ async function executeTool(name: string, args: Record<string, unknown>, centerId
       const offset = (page - 1) * limit
 
       const data = await sql`
-        SELECT DISTINCT p.id, p.full_name, p.phone, p.email, p.created_at
+        SELECT p.id, p.full_name, p.phone, p.email, p.created_at
         FROM profiles p
-        JOIN vehicles v ON v.customer_id = p.id
-        WHERE v.center_id = ${centerId}
-          AND p.role = 'customer'
+        WHERE p.role = 'customer'
+          AND p.id IN (
+            SELECT customer_id FROM vehicles WHERE center_id = ${centerId}
+            UNION
+            SELECT customer_id FROM maintenance_logs WHERE center_id = ${centerId}
+            UNION
+            SELECT customer_id FROM appointments WHERE center_id = ${centerId}
+          )
           AND (${search || null}::text IS NULL OR p.full_name ILIKE ${'%' + (search || '') + '%'})
         ORDER BY p.full_name ASC
         LIMIT ${limit} OFFSET ${offset}
@@ -702,7 +715,19 @@ async function executeTool(name: string, args: Record<string, unknown>, centerId
       const pattern = `%${q}%`
 
       const [customers, vehicles, parts] = await Promise.all([
-        sql`SELECT id, full_name, phone, email FROM profiles WHERE role = 'customer' AND (full_name ILIKE ${pattern} OR phone ILIKE ${pattern} OR email ILIKE ${pattern}) LIMIT 10`,
+        sql`
+          SELECT id, full_name, phone, email FROM profiles
+          WHERE role = 'customer'
+            AND id IN (
+              SELECT customer_id FROM vehicles WHERE center_id = ${centerId}
+              UNION
+              SELECT customer_id FROM maintenance_logs WHERE center_id = ${centerId}
+              UNION
+              SELECT customer_id FROM appointments WHERE center_id = ${centerId}
+            )
+            AND (full_name ILIKE ${pattern} OR phone ILIKE ${pattern} OR email ILIKE ${pattern})
+          LIMIT 10
+        `,
         sql`SELECT v.id, v.make, v.model, v.plate_number, p.full_name AS customer_name FROM vehicles v LEFT JOIN profiles p ON p.id = v.customer_id WHERE v.center_id = ${centerId} AND (v.make ILIKE ${pattern} OR v.model ILIKE ${pattern} OR v.plate_number ILIKE ${pattern}) LIMIT 10`,
         sql`SELECT id, name, name_ar, brand, price, quantity FROM spare_parts WHERE center_id = ${centerId} AND (name ILIKE ${pattern} OR name_ar ILIKE ${pattern} OR brand ILIKE ${pattern}) LIMIT 10`,
       ])
