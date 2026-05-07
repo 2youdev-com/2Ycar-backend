@@ -1,12 +1,12 @@
 import { sql } from '../db/client'
 
-const GEMINI_API_KEY = process.env.GEMINI_API_KEY || ''
-const GEMINI_MODEL = 'gemini-2.5-flash'
-const GEMINI_URL = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${GEMINI_API_KEY}`
+const DEEPSEEK_API_KEY = process.env.DEEPSEEK_API_KEY || ''
+const DEEPSEEK_MODEL = 'deepseek-chat'
+const DEEPSEEK_URL = 'https://api.deepseek.com/chat/completions'
 
-// ── Tool Definitions for Gemini ─────────────────────────────────
+// ── Tool Definitions ────────────────────────────────────────────
 
-const tools = [
+const toolDeclarations = [
   {
     function_declarations: [
       // ── Dashboard / Stats ──
@@ -327,6 +327,11 @@ const tools = [
     ],
   },
 ]
+
+const tools = toolDeclarations[0].function_declarations.map((fn) => ({
+  type: 'function' as const,
+  function: { name: fn.name, description: fn.description, parameters: fn.parameters },
+}))
 
 // ── Tool Execution Functions ────────────────────────────────────
 
@@ -712,7 +717,7 @@ async function executeTool(name: string, args: Record<string, unknown>, centerId
 
 // ── Customer Tools (scoped to the authenticated customer) ───────
 
-const customerTools = [
+const customerToolDeclarations = [
   {
     function_declarations: [
       {
@@ -831,6 +836,11 @@ const customerTools = [
     ],
   },
 ]
+
+const customerTools = customerToolDeclarations[0].function_declarations.map((fn) => ({
+  type: 'function' as const,
+  function: { name: fn.name, description: fn.description, parameters: fn.parameters },
+}))
 
 async function executeCustomerTool(
   name: string,
@@ -1040,68 +1050,97 @@ interface ChatMessage {
   parts: any[]
 }
 
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+type OpenAIMessage = Record<string, any>
+
+function historyToOpenAIMessages(history: ChatMessage[]): OpenAIMessage[] {
+  return history.map((msg) => {
+    const text = msg.parts?.[0]?.text ?? ''
+    return {
+      role: msg.role === 'model' ? 'assistant' : 'user',
+      content: text,
+    }
+  })
+}
+
+async function callDeepSeek(
+  messages: OpenAIMessage[],
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  toolList: any[],
+  context: string,
+): Promise<OpenAIMessage> {
+  const response = await fetch(DEEPSEEK_URL, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${DEEPSEEK_API_KEY}`,
+    },
+    body: JSON.stringify({
+      model: DEEPSEEK_MODEL,
+      messages,
+      tools: toolList,
+      tool_choice: 'auto',
+    }),
+  })
+
+  if (!response.ok) {
+    const errText = await response.text()
+    console.error(`[${context}] DeepSeek API error [${response.status}]:`, errText)
+
+    let detail = errText
+    try {
+      const parsed = JSON.parse(errText)
+      detail = parsed?.error?.message || errText
+    } catch {}
+
+    if (response.status === 429) {
+      throw new Error('تم استهلاك الحد المسموح من الذكاء الاصطناعي مؤقتاً، جرّب بعد دقيقة')
+    }
+    if (response.status === 401 || response.status === 403) {
+      throw new Error('مفتاح DeepSeek API غير صالح أو منتهي')
+    }
+    if (response.status === 402) {
+      throw new Error('الرصيد بتاع DeepSeek API خلص، اشحنه من الـ dashboard')
+    }
+    throw new Error(`فشل الاتصال بالذكاء الاصطناعي (${response.status}): ${detail.slice(0, 200)}`)
+  }
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const data: any = await response.json()
+  const choice = data.choices?.[0]
+
+  if (!choice?.message) {
+    throw new Error('رد غير متوقع من الذكاء الاصطناعي')
+  }
+
+  return choice.message
+}
+
 export async function processChat(
   message: string,
   centerId: string,
   history: ChatMessage[] = []
 ): Promise<{ reply: string; history: ChatMessage[] }> {
 
-  // Build conversation with history
-  const contents = [
-    ...history,
-    { role: 'user' as const, parts: [{ text: message }] },
+  const messages: OpenAIMessage[] = [
+    { role: 'system', content: SYSTEM_PROMPT },
+    ...historyToOpenAIMessages(history),
+    { role: 'user', content: message },
   ]
 
-  let currentContents = contents
-  let maxIterations = 10 // Prevent infinite loops
+  let maxIterations = 10
 
   while (maxIterations-- > 0) {
-    const response = await fetch(GEMINI_URL, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        system_instruction: { parts: [{ text: SYSTEM_PROMPT }] },
-        contents: currentContents,
-        tools,
-        tool_config: { function_calling_config: { mode: 'AUTO' } },
-      }),
-    })
+    const assistantMsg = await callDeepSeek(messages, tools, 'Chat')
+    messages.push(assistantMsg)
 
-    if (!response.ok) {
-      const errText = await response.text()
-      console.error(`Gemini API error [${response.status}]:`, errText)
+    const toolCalls = assistantMsg.tool_calls as
+      | Array<{ id: string; function: { name: string; arguments: string } }>
+      | undefined
 
-      let detail = errText
-      try {
-        const parsed = JSON.parse(errText)
-        detail = parsed?.error?.message || errText
-      } catch {}
-
-      if (response.status === 429) {
-        throw new Error('تم استهلاك الحد المسموح من الذكاء الاصطناعي مؤقتاً، جرّب بعد دقيقة')
-      }
-      if (response.status === 401 || response.status === 403) {
-        throw new Error('مفتاح Gemini API غير صالح أو منتهي')
-      }
-      throw new Error(`فشل الاتصال بالذكاء الاصطناعي (${response.status}): ${detail.slice(0, 200)}`)
-    }
-
-    const data: any = await response.json()
-    const candidate = data.candidates?.[0]
-
-    if (!candidate?.content?.parts) {
-      throw new Error('رد غير متوقع من الذكاء الاصطناعي')
-    }
-
-    const parts = candidate.content.parts
-
-    // Check if there are function calls
-    const functionCalls = parts.filter((p: { functionCall?: unknown }) => p.functionCall)
-
-    if (functionCalls.length === 0) {
-      // No function calls - return the text response
-      const textPart = parts.find((p: { text?: string }) => p.text)
-      const reply = textPart?.text || 'عذراً، مقدرتش أفهم الطلب.'
+    if (!toolCalls || toolCalls.length === 0) {
+      const reply = (typeof assistantMsg.content === 'string' && assistantMsg.content.trim())
+        || 'عذراً، مقدرتش أفهم الطلب.'
 
       const updatedHistory: ChatMessage[] = [
         ...history,
@@ -1112,36 +1151,33 @@ export async function processChat(
       return { reply, history: updatedHistory }
     }
 
-    // Execute all function calls
-    const functionResponses = []
-    for (const fc of functionCalls) {
-      const { name, args } = fc.functionCall
-      console.log(`[Chat] Executing tool: ${name}`, args)
+    for (const call of toolCalls) {
+      const name = call.function.name
+      let args: Record<string, unknown> = {}
       try {
-        const result = await executeTool(name, args || {}, centerId)
-        functionResponses.push({
-          functionResponse: {
-            name,
-            response: { result },
-          },
-        })
+        args = call.function.arguments ? JSON.parse(call.function.arguments) : {}
+      } catch (err) {
+        console.error(`[Chat] Invalid tool args for ${name}:`, call.function.arguments, err)
+      }
+      console.log(`[Chat] Executing tool: ${name}`, args)
+
+      let toolContent: string
+      try {
+        const result = await executeTool(name, args, centerId)
+        toolContent = JSON.stringify(result)
       } catch (err) {
         console.error(`[Chat] Tool error (${name}):`, err)
-        functionResponses.push({
-          functionResponse: {
-            name,
-            response: { error: `فشل تنفيذ الأداة: ${err instanceof Error ? err.message : 'خطأ غير معروف'}` },
-          },
+        toolContent = JSON.stringify({
+          error: `فشل تنفيذ الأداة: ${err instanceof Error ? err.message : 'خطأ غير معروف'}`,
         })
       }
-    }
 
-    // Add model response and function results to conversation
-    currentContents = [
-      ...currentContents,
-      { role: 'model' as const, parts },
-      { role: 'user' as const, parts: functionResponses },
-    ]
+      messages.push({
+        role: 'tool',
+        tool_call_id: call.id,
+        content: toolContent,
+      })
+    }
   }
 
   return {
@@ -1207,59 +1243,25 @@ export async function processCustomerChat(
 ): Promise<{ reply: string; history: ChatMessage[] }> {
   const effectiveCenterId = centerId ?? DEFAULT_CENTER_ID
 
-  const contents = [
-    ...history,
-    { role: 'user' as const, parts: [{ text: message }] },
+  const messages: OpenAIMessage[] = [
+    { role: 'system', content: CUSTOMER_SYSTEM_PROMPT },
+    ...historyToOpenAIMessages(history),
+    { role: 'user', content: message },
   ]
 
-  let currentContents = contents
   let maxIterations = 10
 
   while (maxIterations-- > 0) {
-    const response = await fetch(GEMINI_URL, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        system_instruction: { parts: [{ text: CUSTOMER_SYSTEM_PROMPT }] },
-        contents: currentContents,
-        tools: customerTools,
-        tool_config: { function_calling_config: { mode: 'AUTO' } },
-      }),
-    })
+    const assistantMsg = await callDeepSeek(messages, customerTools, 'CustomerChat')
+    messages.push(assistantMsg)
 
-    if (!response.ok) {
-      const errText = await response.text()
-      console.error(`Gemini API error [${response.status}]:`, errText)
+    const toolCalls = assistantMsg.tool_calls as
+      | Array<{ id: string; function: { name: string; arguments: string } }>
+      | undefined
 
-      let detail = errText
-      try {
-        const parsed = JSON.parse(errText)
-        detail = parsed?.error?.message || errText
-      } catch {}
-
-      if (response.status === 429) {
-        throw new Error('تم استهلاك الحد المسموح من الذكاء الاصطناعي مؤقتاً، جرّب بعد دقيقة')
-      }
-      if (response.status === 401 || response.status === 403) {
-        throw new Error('مفتاح Gemini API غير صالح أو منتهي')
-      }
-      throw new Error(`فشل الاتصال بالذكاء الاصطناعي (${response.status}): ${detail.slice(0, 200)}`)
-    }
-
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const data: any = await response.json()
-    const candidate = data.candidates?.[0]
-
-    if (!candidate?.content?.parts) {
-      throw new Error('رد غير متوقع من الذكاء الاصطناعي')
-    }
-
-    const parts = candidate.content.parts
-    const functionCalls = parts.filter((p: { functionCall?: unknown }) => p.functionCall)
-
-    if (functionCalls.length === 0) {
-      const textPart = parts.find((p: { text?: string }) => p.text)
-      const reply = textPart?.text || 'عذراً، مقدرتش أفهم الطلب.'
+    if (!toolCalls || toolCalls.length === 0) {
+      const reply = (typeof assistantMsg.content === 'string' && assistantMsg.content.trim())
+        || 'عذراً، مقدرتش أفهم الطلب.'
 
       const updatedHistory: ChatMessage[] = [
         ...history,
@@ -1270,31 +1272,33 @@ export async function processCustomerChat(
       return { reply, history: updatedHistory }
     }
 
-    const functionResponses = []
-    for (const fc of functionCalls) {
-      const { name, args } = fc.functionCall
-      console.log(`[CustomerChat] Executing tool: ${name}`, args)
+    for (const call of toolCalls) {
+      const name = call.function.name
+      let args: Record<string, unknown> = {}
       try {
-        const result = await executeCustomerTool(name, args || {}, customerId, effectiveCenterId)
-        functionResponses.push({
-          functionResponse: { name, response: { result } },
-        })
+        args = call.function.arguments ? JSON.parse(call.function.arguments) : {}
+      } catch (err) {
+        console.error(`[CustomerChat] Invalid tool args for ${name}:`, call.function.arguments, err)
+      }
+      console.log(`[CustomerChat] Executing tool: ${name}`, args)
+
+      let toolContent: string
+      try {
+        const result = await executeCustomerTool(name, args, customerId, effectiveCenterId)
+        toolContent = JSON.stringify(result)
       } catch (err) {
         console.error(`[CustomerChat] Tool error (${name}):`, err)
-        functionResponses.push({
-          functionResponse: {
-            name,
-            response: { error: `فشل تنفيذ الأداة: ${err instanceof Error ? err.message : 'خطأ غير معروف'}` },
-          },
+        toolContent = JSON.stringify({
+          error: `فشل تنفيذ الأداة: ${err instanceof Error ? err.message : 'خطأ غير معروف'}`,
         })
       }
-    }
 
-    currentContents = [
-      ...currentContents,
-      { role: 'model' as const, parts },
-      { role: 'user' as const, parts: functionResponses },
-    ]
+      messages.push({
+        role: 'tool',
+        tool_call_id: call.id,
+        content: toolContent,
+      })
+    }
   }
 
   return {
