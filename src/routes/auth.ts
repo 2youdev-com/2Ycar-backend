@@ -67,7 +67,7 @@ authRouter.post('/login', async (req, res: Response) => {
     const message = err instanceof Error ? err.message : 'Unknown error'
     return res.status(500).json({
       error: 'فشل تسجيل الدخول',
-      ...(process.env.NODE_ENV !== 'production' && { detail: message }),
+      detail: message,
     })
   }
 })
@@ -124,10 +124,9 @@ authRouter.post('/register', async (req, res: Response) => {
   } catch (err: unknown) {
     console.error('Registration error:', err)
     const message = err instanceof Error ? err.message : 'Unknown error'
-    // Surface DB errors (e.g. missing table) in non-production for debugging
     return res.status(500).json({
       error: 'فشل إنشاء الحساب',
-      ...(process.env.NODE_ENV !== 'production' && { detail: message }),
+      detail: message,
     })
   }
 })
