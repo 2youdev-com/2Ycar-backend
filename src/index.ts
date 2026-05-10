@@ -63,6 +63,22 @@ app.get('/health', (_req, res) => {
   })
 })
 
+// ── Debug DB (temporary) ──────────────────────────────────────
+import { sql } from './db/client'
+app.get('/debug/db', async (_req, res) => {
+  try {
+    const rows = await sql`SELECT 1 AS ok`
+    res.json({ db: 'connected', rows, env: {
+      hasDbUrl: !!process.env.DATABASE_URL,
+      nodeEnv: process.env.NODE_ENV,
+      dbUrlPrefix: process.env.DATABASE_URL?.substring(0, 30) + '...',
+    }})
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : String(err)
+    res.status(500).json({ db: 'error', message, stack: err instanceof Error ? err.stack?.split('\n').slice(0,5) : undefined })
+  }
+})
+
 // ── API Routes ────────────────────────────────────────────────
 // Mount at both root and /api/v1 so the backend works whether
 // NEXT_PUBLIC_API_URL is set with or without the /api/v1 suffix.
