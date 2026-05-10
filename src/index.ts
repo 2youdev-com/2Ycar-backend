@@ -64,15 +64,18 @@ app.get('/health', (_req, res) => {
 })
 
 // ── API Routes ────────────────────────────────────────────────
-const API = '/api/v1'
-app.use(`${API}/auth`,         authRouter)
-app.use(`${API}/dashboard`,    dashboardRouter)
-app.use(`${API}/maintenance`,  maintenanceRouter)
-app.use(`${API}/inventory`,    inventoryRouter)
-app.use(`${API}/customers`,    customersRouter)
-app.use(`${API}/vehicles`,     vehiclesRouter)
-app.use(`${API}/appointments`, appointmentsRouter)
-app.use(`${API}/chat`,         chatRouter)
+// Mount at both root and /api/v1 so the backend works whether
+// NEXT_PUBLIC_API_URL is set with or without the /api/v1 suffix.
+for (const prefix of ['', '/api/v1']) {
+  app.use(`${prefix}/auth`,         authRouter)
+  app.use(`${prefix}/dashboard`,    dashboardRouter)
+  app.use(`${prefix}/maintenance`,  maintenanceRouter)
+  app.use(`${prefix}/inventory`,    inventoryRouter)
+  app.use(`${prefix}/customers`,    customersRouter)
+  app.use(`${prefix}/vehicles`,     vehiclesRouter)
+  app.use(`${prefix}/appointments`, appointmentsRouter)
+  app.use(`${prefix}/chat`,         chatRouter)
+}
 
 // ── 404 & Error handler ────────────────────────────────────────
 app.use((_req, res) => {
